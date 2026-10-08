@@ -16,6 +16,13 @@
             android:textAppearance="@android:style/TextAppearance.Material.Subhead" />
 
         <TextView
+            android:id="@+id/transport"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="2dp"
+            android:textAppearance="@android:style/TextAppearance.Material.Caption" />
+
+        <TextView
             android:id="@+id/showing"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -119,6 +126,30 @@
             android:paddingTop="8dp"
             android:paddingBottom="8dp"
             android:text="Fill screen (crop edges)" />
+
+        <Switch
+            android:id="@+id/loop"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="Loop videos (off = stop on last frame)" />
+
+        <Switch
+            android:id="@+id/quiet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="Hide Fire TV notifications" />
+
+        <Switch
+            android:id="@+id/autostart"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:text="Open automatically at power-on" />
 
         <Switch
             android:id="@+id/audio"

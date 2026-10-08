@@ -75,6 +75,23 @@ class CommandProcessor(private val app: AndroidCastApp) {
                 applySettings()
                 "OK audio ${if (app.prefs.audio) "on" else "off"}"
             }
+            "QUIET" -> {
+                app.prefs.quiet = parseOnOff(rest.firstOrNull()) ?: return "ERR usage: QUIET on|off"
+                "OK quiet ${if (app.prefs.quiet) "on" else "off"}" +
+                    if (app.prefs.quiet && !NotificationBlocker.isEnabled(app)) " (needs notification access - see README)" else ""
+            }
+            "LAN" -> {
+                // Lets a paired controller send files over Wi-Fi. The token is only ever
+                // given out here, over the paired Bluetooth link.
+                val ip = app.wifi.ipAddress() ?: return "ERR display is not on Wi-Fi"
+                val port = app.lan.port.takeIf { it > 0 } ?: return "ERR Wi-Fi transfer server not running"
+                "OK $ip $port ${app.prefs.lanToken}"
+            }
+            "LOOP" -> {
+                app.prefs.loop = parseOnOff(rest.firstOrNull()) ?: return "ERR usage: LOOP on|off"
+                applySettings()
+                "OK loop ${if (app.prefs.loop) "on" else "off"}"
+            }
             "AUTOSTART" -> {
                 app.prefs.autostart = parseOnOff(rest.firstOrNull()) ?: return "ERR usage: AUTOSTART on|off"
                 "OK autostart ${if (app.prefs.autostart) "on" else "off"}"
@@ -97,12 +114,9 @@ class CommandProcessor(private val app: AndroidCastApp) {
             }
             "THUMB" -> {
                 // THUMB <file> [width] -> "DATA <bytes>", then that many bytes of JPEG, then "OK".
-                val file = app.library.find(rest.firstOrNull() ?: return "ERR usage: THUMB <filename> [width]")
-                    ?: return "ERR no such file"
-                val width = rest.getOrNull(1)?.toIntOrNull()?.coerceIn(64, 1280) ?: 320
-                // A disk error here shouldn't drop the Bluetooth connection, so catch IOException.
-                val jpeg = try { thumbnail(file, width) } catch (e: IOException) { null }
-                    ?: return "ERR can't make a preview of ${file.name}"
+                val name = rest.firstOrNull() ?: return "ERR usage: THUMB <filename> [width]"
+                val jpeg = thumbnailFor(name, rest.getOrNull(1)?.toIntOrNull() ?: 320)
+                    ?: return "ERR can't make a preview of $name"
                 progress("DATA ${jpeg.size}")
                 sendBytes(jpeg)
                 "OK"
@@ -131,7 +145,9 @@ class CommandProcessor(private val app: AndroidCastApp) {
             "  interval:  ${if (p.intervalSeconds == 0) "off" else "${p.intervalSeconds}s"}",
             "  fit:       ${if (p.cover) "cover" else "contain"}",
             "  audio:     ${if (p.audio) "on" else "off"}",
+            "  loop:      ${if (p.loop) "on" else "off"}",
             "  autostart: ${if (p.autostart) "on" else "off"}",
+            "  quiet:     ${if (p.quiet) "on" else "off"}${if (NotificationBlocker.isEnabled(app)) "" else " (no notification access)"}",
             "  free:      ${app.library.dir.usableSpace / MB} MB",
             "OK",
         ).joinToString("\n")
@@ -150,11 +166,20 @@ class CommandProcessor(private val app: AndroidCastApp) {
     private fun upload(rest: List<String>, input: InputStream, progress: (String) -> Unit): String {
         if (rest.size < 2) return "ERR usage: UPLOAD <filename> <size-in-bytes>"
         val size = rest[1].toLongOrNull()?.takeIf { it > 0 } ?: return "ERR bad size"
-        val target = app.library.safeFile(rest[0])
+        return receiveFile(rest[0], size, input) { progress("READY") }
+    }
+
+    /**
+     * Saves exactly [size] bytes from [input] as [name] in the backgrounds folder.
+     * Shared by Bluetooth UPLOAD and Wi-Fi uploads ([LanServer]). [beforeData] runs once
+     * the upload is accepted, just before reading.
+     */
+    fun receiveFile(name: String, size: Long, input: InputStream, beforeData: () -> Unit = {}): String {
+        val target = app.library.safeFile(name)
         if (size > app.library.dir.usableSpace - 20 * MB) return "ERR not enough free space"
 
         val part = app.library.partFile(target)
-        progress("READY")
+        beforeData()
         try {
             part.outputStream().buffered(64 * 1024).use { out ->
                 val buf = ByteArray(16 * 1024)
@@ -224,6 +249,13 @@ class CommandProcessor(private val app: AndroidCastApp) {
             conn.disconnect()
         }
         return finish(part, target)
+    }
+
+    /** JPEG preview for a file in the library, or null if it doesn't exist or can't be decoded. */
+    fun thumbnailFor(name: String, width: Int): ByteArray? {
+        val file = app.library.find(name) ?: return null
+        // A disk error here shouldn't drop the connection, so swallow IOException.
+        return try { thumbnail(file, width.coerceIn(64, 1280)) } catch (e: IOException) { null }
     }
 
     /** Small JPEG preview of an image or a video's first second, cached until the file changes. */
@@ -326,9 +358,9 @@ class CommandProcessor(private val app: AndroidCastApp) {
 
         private val HELP = """
             |  Playback:  NEXT | PREV | GOTO <n> | SHOW <file> | BLANK on|off
-            |  Settings:  INTERVAL <sec> (0=off) | FIT cover|contain | AUDIO on|off | AUTOSTART on|off
+            |  Settings:  INTERVAL <sec> (0=off) | FIT cover|contain | AUDIO on|off | LOOP on|off | AUTOSTART on|off | QUIET on|off
             |  Files:     LIST | THUMB <file> [width] | UPLOAD <file> <bytes> | FETCH <url> [file] | DELETE <file> | RENAME <old> <new>
-            |  Wi-Fi:     WIFI "<network>" "<password>" | FORGETWIFI "<network>"
+            |  Wi-Fi:     WIFI "<network>" "<password>" | FORGETWIFI "<network>" | LAN
             |  Info:      STATUS | PING | HELP
             |  Put names with spaces in "double quotes".
             |OK

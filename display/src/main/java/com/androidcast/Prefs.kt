@@ -21,10 +21,28 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("audio", false)
         set(v) = sp.edit().putBoolean("audio", v).apply()
 
+    /** Loop videos; when off they play once and hold the last frame. */
+    var loop: Boolean
+        get() = sp.getBoolean("loop", false)
+        set(v) = sp.edit().putBoolean("loop", v).apply()
+
     /** Open the player automatically when the stick boots. */
     var autostart: Boolean
         get() = sp.getBoolean("autostart", true)
         set(v) = sp.edit().putBoolean("autostart", v).apply()
+
+    /** Hide other apps' notifications (Fire OS pop-ups) while the player runs. */
+    var quiet: Boolean
+        get() = sp.getBoolean("quiet", true)
+        set(v) = sp.edit().putBoolean("quiet", v).apply()
+
+    /**
+     * Secret that Wi-Fi uploads must present. Created once, and only shared over the
+     * paired Bluetooth link, so other devices on the network can't change the display.
+     */
+    val lanToken: String
+        get() = sp.getString("lan_token", null) ?: java.util.UUID.randomUUID().toString().replace("-", "")
+            .also { sp.edit().putString("lan_token", it).apply() }
 
     /** Name of the background on screen, restored after a restart. */
     var currentName: String?

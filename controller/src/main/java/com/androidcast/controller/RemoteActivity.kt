@@ -1,5 +1,6 @@
 package com.androidcast.controller
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
@@ -39,6 +40,15 @@ class RemoteActivity : Activity() {
     /** All Bluetooth I/O happens on this single thread, so commands never overlap. */
     private val worker = Executors.newSingleThreadExecutor()
     @Volatile private var connection: CastConnection? = null
+    /** Set when the display is reachable on the same Wi-Fi: uploads and previews go this way. */
+    @Volatile private var lan: LanClient? = null
+    /** Wi-Fi transfers run here, so they don't hold up Bluetooth button presses. */
+    private val lanPool = Executors.newFixedThreadPool(2)
+    private lateinit var phoneWifi: PhoneWifi
+    /** The display's Wi-Fi status line from STATUS, e.g. "Home (192.168.1.50)" or "not connected". */
+    private var displayWifi: String? = null
+    /** Only offer to send the phone's Wi-Fi once per visit. */
+    private var wifiOffered = false
 
     private lateinit var address: String
     private var deviceName = ""
@@ -62,6 +72,10 @@ class RemoteActivity : Activity() {
     private lateinit var uploadText: TextView
     private lateinit var fit: Switch
     private lateinit var audio: Switch
+    private lateinit var loop: Switch
+    private lateinit var quiet: Switch
+    private lateinit var autostart: Switch
+    private lateinit var transport: TextView
     private lateinit var intervalButton: Button
     private lateinit var details: TextView
     private lateinit var controls: List<View>
@@ -84,6 +98,11 @@ class RemoteActivity : Activity() {
         uploadText = findViewById(R.id.uploadText)
         fit = findViewById(R.id.fit)
         audio = findViewById(R.id.audio)
+        loop = findViewById(R.id.loop)
+        quiet = findViewById(R.id.quiet)
+        autostart = findViewById(R.id.autostart)
+        transport = findViewById(R.id.transport)
+        phoneWifi = PhoneWifi(this)
         intervalButton = findViewById(R.id.interval)
         details = findViewById(R.id.details)
 
@@ -94,7 +113,7 @@ class RemoteActivity : Activity() {
         val upload = findViewById<Button>(R.id.upload)
         val wifi = findViewById<Button>(R.id.wifi)
         val fetch = findViewById<Button>(R.id.fetch)
-        controls = listOf(prev, next, blankButton, refresh, upload, fit, audio, intervalButton, wifi, fetch)
+        controls = listOf(prev, next, blankButton, refresh, upload, fit, audio, loop, quiet, autostart, intervalButton, wifi, fetch)
 
         prev.setOnClickListener { send("PREV") }
         next.setOnClickListener { send("NEXT") }
@@ -104,8 +123,11 @@ class RemoteActivity : Activity() {
         upload.setOnClickListener { pickFiles() }
         fit.setOnCheckedChangeListener { _, on -> if (!updatingSwitches) send("FIT ${if (on) "cover" else "contain"}") }
         audio.setOnCheckedChangeListener { _, on -> if (!updatingSwitches) send("AUDIO ${if (on) "on" else "off"}") }
+        loop.setOnCheckedChangeListener { _, on -> if (!updatingSwitches) send("LOOP ${if (on) "on" else "off"}") }
+        quiet.setOnCheckedChangeListener { _, on -> if (!updatingSwitches) send("QUIET ${if (on) "on" else "off"}") }
+        autostart.setOnCheckedChangeListener { _, on -> if (!updatingSwitches) send("AUTOSTART ${if (on) "on" else "off"}") }
         intervalButton.setOnClickListener { askInterval() }
-        wifi.setOnClickListener { askWifi() }
+        wifi.setOnClickListener { askWifi(prefillSsid = phoneWifi.currentSsid()) }
         fetch.setOnClickListener { askFetch() }
 
         connect()
@@ -114,6 +136,7 @@ class RemoteActivity : Activity() {
     override fun onDestroy() {
         connection?.close()
         worker.shutdownNow()
+        lanPool.shutdownNow()
         super.onDestroy()
     }
 
@@ -177,10 +200,35 @@ class RemoteActivity : Activity() {
         val conn = connection ?: return
         try {
             refreshStatusNow(conn)
+            checkLanNow(conn)
             val list = conn.command("LIST")
             ui.post { showItems(list.dropLast(1).mapNotNull(::parseItem)) }
         } catch (e: IOException) {
             lostConnection(e)
+        }
+    }
+
+    /**
+     * Worker thread. Asks the display for its Wi-Fi address and checks this phone can reach it,
+     * i.e. that both are on the same network. If so, files and previews go over Wi-Fi.
+     */
+    private fun checkLanNow(conn: CastConnection) {
+        val reply = conn.command("LAN").last()  // "OK <ip> <port> <token>", or ERR (no Wi-Fi / older display)
+        val parts = reply.split(" ")
+        val client = if (reply.startsWith("OK") && parts.size >= 4 && phoneWifi.isOnWifi()) {
+            parts[2].toIntOrNull()?.let { port -> LanClient(this, parts[1], port, parts[3]) }
+        } else null
+        lan = client?.takeIf { it.ping() }
+        ui.post { showTransport() }
+    }
+
+    private fun showTransport() {
+        val wifiDown = displayWifi == null || displayWifi == "off" || displayWifi == "not connected"
+        transport.text = when {
+            lan != null -> "⚡ Same Wi-Fi as the display (${lan?.ip}): files go over Wi-Fi"
+            wifiDown -> "Display isn't on Wi-Fi: files go over Bluetooth (slow)"
+            !phoneWifi.isOnWifi() -> "This phone isn't on Wi-Fi: files go over Bluetooth (slow)"
+            else -> "Display is on a different network: files go over Bluetooth (slow)"
         }
     }
 
@@ -202,7 +250,16 @@ class RemoteActivity : Activity() {
         updatingSwitches = true
         fit.isChecked = status["fit"] == "cover"
         audio.isChecked = status["audio"] == "on"
+        loop.isChecked = status["loop"] == "on"
+        quiet.isChecked = status["quiet"]?.startsWith("on") == true
+        autostart.isChecked = status["autostart"] == "on"
         updatingSwitches = false
+        displayWifi = status["wifi"]
+        showTransport()
+        if ((displayWifi == "off" || displayWifi == "not connected") && !wifiOffered) {
+            wifiOffered = true
+            offerWifi()
+        }
         intervalSeconds = status["interval"]?.removeSuffix("s")?.toIntOrNull() ?: 0
         intervalButton.text = "Auto-advance: ${if (intervalSeconds == 0) "off" else "every ${intervalSeconds}s"}"
         details.text = raw.joinToString("\n") { it.trim() }
@@ -282,30 +339,52 @@ class RemoteActivity : Activity() {
         return frame
     }
 
-    /** Memory cache, then disk cache, then ask the display (queued behind any button presses). */
+    /**
+     * Memory cache, then disk cache, then ask the display: over Wi-Fi when we can (in parallel),
+     * otherwise over Bluetooth (queued behind any button presses).
+     */
     private fun loadThumbnail(item: Item, image: ImageView, gen: Int) {
         val key = "${item.name}|${item.size}"
         thumbCache[key]?.let { return image.setImageBitmap(it) }
         val diskFile = File(cacheDir, "thumbs/${key.hashCode().toUInt()}.jpg")
-        worker.execute {
+        val lanNow = lan
+        (if (lanNow != null) lanPool else worker).execute {
             if (gen != gridGeneration) return@execute
-            val bytes = if (diskFile.exists()) diskFile.readBytes() else {
-                val conn = connection ?: return@execute
-                val fetched = try {
-                    conn.thumbnail(item.name, THUMB_WIDTH)
-                } catch (e: IOException) {
-                    lostConnection(e)
-                    return@execute
-                } ?: return@execute
+            val bytes = when {
+                diskFile.exists() -> diskFile.readBytes()
+                lanNow != null -> lanNow.thumbnail(item.name, THUMB_WIDTH)
+                    // Wi-Fi didn't work out; fall back to Bluetooth.
+                    ?: return@execute worker.execute { fetchThumbOverBluetooth(item, key, diskFile, image, gen) }
+                else -> return@execute fetchThumbOverBluetooth(item, key, diskFile, image, gen)
+            }
+            if (!diskFile.exists()) {
                 diskFile.parentFile?.mkdirs()
-                diskFile.writeBytes(fetched)
-                fetched
+                diskFile.writeBytes(bytes)
             }
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@execute
-            ui.post {
-                thumbCache[key] = bitmap
-                if (gen == gridGeneration) image.setImageBitmap(bitmap)
-            }
+            showThumb(bytes, key, image, gen)
+        }
+    }
+
+    /** Worker thread only. */
+    private fun fetchThumbOverBluetooth(item: Item, key: String, diskFile: File, image: ImageView, gen: Int) {
+        if (gen != gridGeneration) return
+        val conn = connection ?: return
+        val bytes = try {
+            conn.thumbnail(item.name, THUMB_WIDTH)
+        } catch (e: IOException) {
+            lostConnection(e)
+            return
+        } ?: return
+        diskFile.parentFile?.mkdirs()
+        diskFile.writeBytes(bytes)
+        showThumb(bytes, key, image, gen)
+    }
+
+    private fun showThumb(bytes: ByteArray, key: String, image: ImageView, gen: Int) {
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+        ui.post {
+            thumbCache[key] = bitmap
+            if (gen == gridGeneration) image.setImageBitmap(bitmap)
         }
     }
 
@@ -353,37 +432,91 @@ class RemoteActivity : Activity() {
             .show()
     }
 
-    private fun askWifi() {
-        val ssid = EditText(this).apply { hint = "Network name"; isSingleLine = true }
+    /**
+     * The display has no Wi-Fi: offer this phone's network. If you've sent this network
+     * before, its password is remembered and it's sent straight away.
+     */
+    private fun offerWifi() {
+        if (!phoneWifi.isOnWifi()) return
+        if (!phoneWifi.hasLocationPermission() && !phoneWifi.askedForLocation) {
+            // Android hides the Wi-Fi name without location permission. Ask once; either way
+            // onRequestPermissionsResult comes back here.
+            phoneWifi.askedForLocation = true
+            requestPermissions(
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+                REQ_LOCATION,
+            )
+            return
+        }
+        val ssid = phoneWifi.currentSsid()
+        val saved = ssid?.let { phoneWifi.savedPassword(it) }
+        if (ssid != null && saved != null) {
+            sendWifi(ssid, saved, announce = "Sent your Wi-Fi \"$ssid\" to the display")
+        } else {
+            askWifi(
+                title = "The display isn't on Wi-Fi",
+                message = "Send this phone's Wi-Fi to it? Then pictures and videos upload much faster. " +
+                    "Android doesn't let apps read Wi-Fi passwords, so type it once - it's remembered on this phone.",
+                prefillSsid = ssid,
+            )
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (requestCode == REQ_LOCATION) offerWifi()
+    }
+
+    private fun askWifi(
+        title: String = "Connect the display to Wi-Fi",
+        message: String? = null,
+        prefillSsid: String? = null,
+    ) {
+        val ssid = EditText(this).apply {
+            hint = "Network name"
+            isSingleLine = true
+            setText(prefillSsid ?: "")
+        }
         val password = EditText(this).apply {
             hint = "Password (blank for open network)"
             isSingleLine = true
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            setText(prefillSsid?.let { phoneWifi.savedPassword(it) } ?: "")
         }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(ssid); addView(password)
         }
         AlertDialog.Builder(this)
-            .setTitle("Connect the display to Wi-Fi")
+            .setTitle(title)
+            .apply { if (message != null) setMessage(message) }
             .setView(padded(box))
-            .setPositiveButton("Connect") { _, _ ->
-                val name = ssid.text.toString()
-                if (name.isBlank()) return@setPositiveButton
-                val cmd = "WIFI ${CastConnection.quote(name)} ${CastConnection.quote(password.text.toString())}"
+            .setPositiveButton("Send to display") { _, _ ->
+                val name = ssid.text.toString().trim()
+                if (name.isNotEmpty()) sendWifi(name, password.text.toString())
+            }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    private fun sendWifi(ssid: String, password: String, announce: String? = null) {
+        phoneWifi.savePassword(ssid, password)
+        val cmd = "WIFI ${CastConnection.quote(ssid)} ${CastConnection.quote(password)}"
+        worker.execute {
+            val conn = connection ?: return@execute
+            try {
+                val reply = conn.command(cmd).last()
+                ui.post { toast(if (reply.startsWith("OK")) announce ?: reply else reply) }
+            } catch (e: IOException) { lostConnection(e) }
+        }
+        // Give the display time to join, then pick up its new address for Wi-Fi transfers.
+        for (delay in listOf(8_000L, 20_000L)) {
+            ui.postDelayed({
                 worker.execute {
                     val conn = connection ?: return@execute
-                    try {
-                        val reply = conn.command(cmd).last()
-                        ui.post { toast(reply) }
-                        // Give it a moment to join, then show the new Wi-Fi status.
-                        Thread.sleep(6000)
-                        refreshStatusNow(conn)
-                    } catch (e: IOException) { lostConnection(e) }
+                    try { refreshStatusNow(conn); checkLanNow(conn) } catch (e: IOException) { lostConnection(e) }
                 }
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+            }, delay)
+        }
     }
 
     private fun askFetch() {
@@ -451,19 +584,31 @@ class RemoteActivity : Activity() {
                         results += "$name: couldn't read file size"
                         return@forEachIndexed
                     }
-                    val started = System.currentTimeMillis()
-                    val reply = contentResolver.openInputStream(uri)!!.use { stream ->
-                        conn.upload(name, size, stream) { sent ->
+                    fun progressVia(via: String): (Long) -> Unit {
+                        val started = System.currentTimeMillis()
+                        return { sent ->
                             val secs = (System.currentTimeMillis() - started) / 1000.0
                             val rate = if (secs > 0) sent / 1024 / secs else 0.0
                             ui.post {
                                 uploadProgress.progress = (sent * 1000 / size).toInt()
-                                uploadText.text = "Uploading ${i + 1}/${uris.size}: $name\n" +
+                                uploadText.text = "Uploading ${i + 1}/${uris.size} over $via: $name\n" +
                                     "${sent / 1024} of ${size / 1024} KB  (%.0f KB/s)".format(rate)
                             }
                         }
                     }
-                    results += reply
+                    // Wi-Fi first when we're on the same network; Bluetooth if that fails.
+                    val viaWifi = lan?.let { lanNow ->
+                        try {
+                            contentResolver.openInputStream(uri)!!.use { lanNow.upload(name, size, it, progressVia("Wi-Fi")) }
+                        } catch (e: IOException) {
+                            lan = null
+                            ui.post { showTransport() }
+                            null
+                        }
+                    }
+                    results += viaWifi ?: contentResolver.openInputStream(uri)!!.use { stream ->
+                        conn.upload(name, size, stream, progressVia("Bluetooth"))
+                    }
                 }
                 ui.post { toast(results.joinToString("\n")) }
                 refreshAllNow()
@@ -522,6 +667,7 @@ class RemoteActivity : Activity() {
     companion object {
         const val EXTRA_ADDRESS = "address"
         private const val PICK_FILES = 1
+        private const val REQ_LOCATION = 2
         private const val COLUMNS = 2
         private const val THUMB_WIDTH = 360
         private const val ACCENT = 0xFFFF5C8A.toInt()

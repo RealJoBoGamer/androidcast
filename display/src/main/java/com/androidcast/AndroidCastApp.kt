@@ -18,6 +18,8 @@ class AndroidCastApp : Application() {
         private set
     lateinit var bluetooth: BluetoothControlServer
         private set
+    lateinit var lan: LanServer
+        private set
 
     /** The on-screen player, set while [MainActivity] exists. Only touch it on the main thread. */
     var player: PlayerControl? = null
@@ -27,8 +29,13 @@ class AndroidCastApp : Application() {
         library = MediaLibrary(this)
         prefs = Prefs(this)
         wifi = WifiSetup(this)
-        bluetooth = BluetoothControlServer(CommandProcessor(this))
+        val processor = CommandProcessor(this)
+        bluetooth = BluetoothControlServer(processor)
         bluetooth.start()
+        lan = LanServer(this, processor)
+        lan.start()
+        // Dedicated display: keep Wi-Fi on and let it join any saved network in range.
+        wifi.enableAllSaved()
 
         // The stick usually sleeps (rather than reboots) when the TV turns off, and Fire OS
         // may show its home screen on wake, so come back to the front when the screen turns on.

@@ -27,7 +27,10 @@ OS 5 (Android 5.1) upwards.
 
 ## Features
 
-- Fullscreen images (JPG/PNG/WebP/BMP) and looping videos (MP4/MKV/WebM…), with crossfades
+- Fullscreen images (JPG/PNG/WebP/BMP) and videos (MP4/MKV/WebM…), with crossfades. Videos play once and stay on their last frame (or loop, if you turn on `LOOP`)
+- **Fast Wi‑Fi transfers:** when the phone and the display are on the same Wi‑Fi, uploads and previews go over the network instead of Bluetooth
+- **Shares your phone's Wi‑Fi:** if the display has no Wi‑Fi, the remote app offers to send it your phone's network. The display remembers every network it's been given and joins whichever one is in range
+- **Quiet mode:** hides Fire TV notifications while the player is on screen
 - Items play in **filename order** (name them `01_intro.mp4`, `02_guest.jpg`, …)
 - **Fill (crop) or fit (letterbox)**. Video audio is **muted by default** so it never bleeds into your podcast
 - Optional auto‑advance timer, plus a "blank" (black screen) toggle
@@ -169,6 +172,53 @@ To stop it taking over the screen (for example, to watch Netflix on the stick), 
 You can check your Fire OS's Android version with `adb shell getprop ro.build.version.sdk`
 (22 = Fire OS 5, 25 = Fire OS 6, 28 = Fire OS 7, 30 = Fire OS 8).
 
+## Wi‑Fi transfers and sharing Wi‑Fi from your phone
+
+When the remote app connects, it asks the display for its Wi‑Fi address over
+Bluetooth and checks it can reach it. The line under the device name tells you which
+route it's using:
+
+- **⚡ Same Wi‑Fi as the display:** uploads and previews go over Wi‑Fi (fast). Bluetooth
+  is still used for the buttons.
+- **…files go over Bluetooth:** they're on different networks, the display has no
+  Wi‑Fi, or the router blocks devices from talking to each other (common on guest
+  networks).
+
+If the display has no Wi‑Fi and the phone does, the remote offers to send the phone's
+network. Android doesn't let apps read saved Wi‑Fi passwords, so you type it once and
+the phone remembers it. Next time it's sent automatically. The app asks for location
+permission only because Android requires it to see the Wi‑Fi network's name.
+
+The display keeps every network it has been given and joins whichever one is in range
+by itself.
+
+Wi‑Fi transfers use port 8642 on the display and need a secret token that's only
+handed out over the paired Bluetooth link, so other devices on the network can't
+upload or delete anything.
+
+## Hiding Fire TV pop‑ups (quiet mode)
+
+**Notifications:** AndroidCast can dismiss other apps' notifications while the player
+is on screen. Fire TV has no settings screen for this, so grant it once with adb:
+
+```sh
+adb shell settings put secure enabled_notification_listeners com.androidcast/com.androidcast.NotificationBlocker
+```
+
+`STATUS` shows `quiet: on` once it's working (without "no notification access").
+Turn it off with `QUIET off` or the switch in the remote app.
+
+**System messages** (such as "remote not detected") aren't notifications. No ordinary
+app can block them. To stop the remote message, keep the Fire TV remote paired with
+fresh batteries. If one keeps appearing, find out which app shows it while it's on screen:
+
+```sh
+adb shell dumpsys window windows | grep -E "mCurrentFocus|mFocusedApp"
+```
+
+Tell me the package name it shows. Disabling system packages can break the stick, so
+check before trying it.
+
 ## Pairing the stick with your phone using adb
 
 The Remote app only lists devices that are already paired. If the stick doesn't
@@ -254,6 +304,9 @@ with a line starting `OK` or `ERR`.
 | `FIT cover\|contain` | crop to fill (default) or letterbox |
 | `AUDIO on\|off` | play video sound (default off) |
 | `AUTOSTART on\|off` | open on boot (default on) |
+| `LOOP on\|off` | loop videos (default off: play once, stay on the last frame) |
+| `QUIET on\|off` | hide other apps' notifications while showing (default on; needs the adb step below) |
+| `LAN` | the display's Wi‑Fi address and token, used by the remote app for Wi‑Fi transfers |
 | `WIFI "<name>" "<password>"` | join a Wi‑Fi network (omit password for open networks) |
 | `FORGETWIFI "<name>"` | remove a saved network |
 | `UPLOAD <file> <bytes>` | stick replies `READY`, then send exactly `<bytes>` raw bytes |

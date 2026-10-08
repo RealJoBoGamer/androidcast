@@ -7,8 +7,6 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.FileObserver
@@ -18,9 +16,12 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Surface
-import android.view.TextureView
+import android.view.Gravity
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.TextView
 import java.io.File
@@ -28,14 +29,16 @@ import java.util.concurrent.Executors
 
 /**
  * Fullscreen background player. Shows the files in [MediaLibrary] one at a
- * time: images stay up, videos loop, until switched by a Bluetooth
+ * time: images stay up, videos play once and hold their last frame (or loop
+ * with LOOP on), until switched by a Bluetooth
  * clicker/keyboard/remote key press, a Bluetooth serial command, or the
  * optional auto-advance timer.
  */
-class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListener {
+class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
 
     private lateinit var app: AndroidCastApp
-    private lateinit var video: TextureView
+    private lateinit var video: SurfaceView
+    private lateinit var blackout: View
     private lateinit var images: Array<ImageView>
     private lateinit var hint: TextView
     private lateinit var overlay: TextView
@@ -82,7 +85,8 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         images = arrayOf(findViewById(R.id.imageA), findViewById(R.id.imageB))
         hint = findViewById(R.id.hint)
         overlay = findViewById(R.id.overlay)
-        video.surfaceTextureListener = this
+        video.holder.addCallback(this)
+        blackout = findViewById(R.id.blackout)
         findViewById<View>(R.id.root).setOnTouchListener { v, e -> onTap(v, e) }
 
         app.player = this
@@ -166,7 +170,6 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         folderWatcher?.stopWatching()
         handler.removeCallbacksAndMessages(null)
         releaseVideo()
-        surface?.release()
         decoder.shutdownNow()
         super.onDestroy()
     }
@@ -319,16 +322,16 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
     override fun applySettings() {
         applyScaleType()
         applyVideoTransform()
-        mediaPlayer?.let { setVolume(it) }
+        mediaPlayer?.let {
+            setVolume(it)
+            it.isLooping = app.prefs.loop
+        }
         scheduleAdvance()
     }
 
     override fun setBlank(blank: Boolean) {
         this.blank = blank
-        val target = if (blank) 0f else 1f
-        video.animate().alpha(target).setDuration(FADE_MS).start()
-        images[frontImage].animate().alpha(if (blank || images[frontImage].drawable == null) 0f else 1f)
-            .setDuration(FADE_MS).start()
+        blackout.animate().alpha(if (blank) 1f else 0f).setDuration(FADE_MS).start()
         if (blank) handler.removeCallbacks(advance) else scheduleAdvance()
     }
 
@@ -338,8 +341,9 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
     // ---- Images --------------------------------------------------------------------------
 
     private fun showImage(file: File, gen: Int) {
-        val w = maxOf(video.width, resources.displayMetrics.widthPixels)
-        val h = maxOf(video.height, resources.displayMetrics.heightPixels)
+        val screen = video.parent as View
+        val w = maxOf(screen.width, resources.displayMetrics.widthPixels)
+        val h = maxOf(screen.height, resources.displayMetrics.heightPixels)
         decoder.execute {
             val bitmap = decodeSampled(file, w, h)
             handler.post {
@@ -362,6 +366,7 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         fresh.setImageBitmap(bitmap)
         fresh.alpha = 0f
         fresh.bringToFront()
+        blackout.bringToFront()
         overlay.bringToFront()
         hint.bringToFront()
         fresh.animate().alpha(1f).setDuration(FADE_MS).withEndAction {
@@ -387,7 +392,7 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
     private fun showVideo(file: File) {
         pendingVideo = file
         if (surface != null) startVideo(file)
-        // otherwise onSurfaceTextureAvailable starts it
+        // otherwise surfaceCreated starts it
     }
 
     private fun startVideo(file: File) {
@@ -399,7 +404,8 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         try {
             mp.setSurface(surface)
             mp.setDataSource(file.absolutePath)
-            mp.isLooping = true
+            // Play once and stay on the last frame, unless LOOP is on.
+            mp.isLooping = app.prefs.loop
             setVolume(mp)
             mp.setOnVideoSizeChangedListener { _, w, h ->
                 videoWidth = w; videoHeight = h
@@ -411,7 +417,7 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
                 false
             }
             mp.setOnErrorListener { _, what, extra ->
-                Log.w(TAG, "video error $what/$extra for ${file.name}")
+                Log.w(TAG, "video error $what/$extra for ${file.name} (${videoWidth}x$videoHeight)")
                 if (gen == generation) flashMessage("Can't play ${file.name} (try H.264 MP4)")
                 true
             }
@@ -439,40 +445,38 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         mediaPlayer = null
     }
 
-    /** TextureView stretches video to fill the view; correct the aspect for cover/contain. */
+    /**
+     * Sizes the video view to the video's shape: fill (cover) makes it at least as big as the
+     * screen, so the edges are cropped; fit (contain) keeps it inside the screen.
+     */
     private fun applyVideoTransform() {
-        val vw = video.width.toFloat()
-        val vh = video.height.toFloat()
-        if (videoWidth == 0 || videoHeight == 0 || vw == 0f || vh == 0f) return
+        val parent = video.parent as View
+        val pw = parent.width
+        val ph = parent.height
+        if (videoWidth == 0 || videoHeight == 0 || pw == 0 || ph == 0) return
         val videoAspect = videoWidth.toFloat() / videoHeight
-        val viewAspect = vw / vh
-        var sx = 1f
-        var sy = 1f
-        if (app.prefs.cover) {
-            if (videoAspect > viewAspect) sx = videoAspect / viewAspect else sy = viewAspect / videoAspect
-        } else {
-            if (videoAspect > viewAspect) sy = viewAspect / videoAspect else sx = videoAspect / viewAspect
+        val screenAspect = pw.toFloat() / ph
+        val fillWidth = if (app.prefs.cover) videoAspect < screenAspect else videoAspect > screenAspect
+        val (w, h) = if (fillWidth) pw to Math.round(pw / videoAspect) else Math.round(ph * videoAspect) to ph
+        val lp = video.layoutParams as FrameLayout.LayoutParams
+        if (lp.width != w || lp.height != h) {
+            video.layoutParams = FrameLayout.LayoutParams(w, h, Gravity.CENTER)
         }
-        video.setTransform(Matrix().apply { setScale(sx, sy, vw / 2, vh / 2) })
     }
 
-    override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
-        surface = Surface(st)
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        surface = holder.surface
         pendingVideo?.let { startVideo(it) }
     }
 
-    override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) = applyVideoTransform()
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
 
-    override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
         // Remember what was playing so it restarts when the surface comes back.
         if (mediaPlayer != null) pendingVideo = items.getOrNull(index)
         releaseVideo()
-        surface?.release()
         surface = null
-        return true
     }
-
-    override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
 
     // ---- Misc ----------------------------------------------------------------------------
 
