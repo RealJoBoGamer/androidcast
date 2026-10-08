@@ -3,7 +3,6 @@ package com.androidcast
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
-import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -21,36 +20,35 @@ import android.view.accessibility.AccessibilityEvent
  */
 class HomeRedirectService : AccessibilityService() {
 
-    private var lastRedirect = 0L
+    /** Packages that count as "the Amazon home screen": known ones plus whatever handles HOME. */
+    private lateinit var homePackages: Set<String>
+    private var lastLogged = ""
+
+    override fun onServiceConnected() {
+        val pm = packageManager
+        val handlers = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
+            .map { it.activityInfo.packageName }
+        homePackages = (AMAZON_HOME + handlers - packageName - "android").toSet()
+        Log.i(TAG, "home button service connected; watching for $homePackages")
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        if (event.packageName?.toString() !in AMAZON_HOME) return
-        val app = application as AndroidCastApp
-        val target = app.prefs.homeTarget
-        if (target == HOME_OFF) return
-
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastRedirect < DOUBLE_PRESS_MS) {
-            // Second Home press soon after a redirect: let Amazon's home screen through.
-            Log.i(TAG, "double Home - showing Amazon home")
-            return
+        val pkg = event.packageName?.toString() ?: return
+        // Log what comes to the front, so `adb logcat -s AndroidCastHome` shows what Home opened.
+        val what = "$pkg/${event.className}"
+        if (what != lastLogged) {
+            lastLogged = what
+            Log.d(TAG, "window: $what")
         }
-        lastRedirect = now
-        val intent = launchIntent(this, target)
-        if (intent == null) {
-            Log.w(TAG, "home target '$target' isn't installed")
-            return
-        }
-        Log.i(TAG, "Amazon home appeared - opening $target")
-        startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
+        val home = (application as AndroidCastApp).home
+        if (pkg in homePackages) home.onHome("Amazon home appeared") else home.onWindow(pkg)
     }
 
     override fun onInterrupt() {}
 
     companion object {
         private const val TAG = "AndroidCastHome"
-        private const val DOUBLE_PRESS_MS = 3000L
         const val HOME_SELF = "androidcast"
         const val HOME_OFF = "off"
 

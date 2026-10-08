@@ -200,8 +200,9 @@ upload or delete anything.
 
 Fire OS ignores Android's "default launcher" setting. Home and start‑up always go to
 Amazon's home screen, and the 1st‑gen stick can't be rooted to change that.
-AndroidCast works around it: when Amazon's home screen appears, it immediately opens
-your chosen launcher instead. Amazon's screen may flash for a moment.
+AndroidCast works around it. When you press Home, it covers the screen in black and
+opens your chosen launcher. After Home is pressed, Android holds back other apps for up
+to **5 seconds**, so expect a short black screen before your launcher appears.
 
 **One‑off setup:**
 
@@ -218,6 +219,14 @@ adb shell settings put secure accessibility_enabled 1
 
 To use another launcher, install its APK with `adb install` (pick one that supports
 Android 5.1), then choose it with `HOME`.
+
+**If Home still goes to Amazon:**
+
+```sh
+adb shell settings get secure enabled_accessibility_services   # should list com.androidcast/...
+adb logcat -c                                                  # clear the log, press Home, wait 10 s, then:
+adb logcat -d -s AndroidCastHome
+```
 
 **Getting back to Amazon's screens:**
 - **Press Home twice quickly** to get Amazon's home screen.

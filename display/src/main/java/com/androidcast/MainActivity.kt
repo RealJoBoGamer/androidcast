@@ -154,10 +154,17 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         app.playerInFront = true
+        app.home.targetShown()
         hideSystemUi()
         app.player = this
         // Pick up files that were adb-pushed while we were in the background.
         reload()
+    }
+
+    /** Called when the user leaves with Home (and not when we open something ourselves). */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        app.home.onHome("Home pressed in AndroidCast")
     }
 
     override fun onPause() {
@@ -248,7 +255,11 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
 
     private fun openSystemSettings() {
         try {
-            startActivity(Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            // NO_USER_ACTION: we're opening this ourselves, so it mustn't count as "Home pressed".
+            startActivity(
+                Intent(android.provider.Settings.ACTION_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+            )
         } catch (e: ActivityNotFoundException) {
             flashMessage("Couldn't open Settings. Press Home twice for the Amazon home screen.")
         }
@@ -258,6 +269,7 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
         try {
             startActivity(
                 Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
                     .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
             )
         } catch (e: ActivityNotFoundException) {

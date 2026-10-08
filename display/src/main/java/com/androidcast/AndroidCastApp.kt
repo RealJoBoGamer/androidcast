@@ -20,6 +20,8 @@ class AndroidCastApp : Application() {
         private set
     lateinit var lan: LanServer
         private set
+    lateinit var home: HomeRedirector
+        private set
 
     /** The on-screen player, set while [MainActivity] exists. Only touch it on the main thread. */
     var player: PlayerControl? = null
@@ -32,6 +34,7 @@ class AndroidCastApp : Application() {
         val processor = CommandProcessor(this)
         bluetooth = BluetoothControlServer(processor)
         bluetooth.start()
+        home = HomeRedirector(this)
         lan = LanServer(this, processor)
         lan.start()
         // Dedicated display: keep Wi-Fi on and let it join any saved network in range.
