@@ -141,8 +141,20 @@ adb shell appops set com.androidcast SYSTEM_ALERT_WINDOW allow
 adb reboot
 ```
 
-About 30–60 seconds after the reboot, the Amazon home screen appears and then
-AndroidCast opens on top of it.
+After the reboot, the Amazon home screen appears and then AndroidCast opens on top
+of it. The app keeps checking for 2 minutes after boot, because older sticks are slow
+to finish starting.
+
+If it doesn't open, check what happened:
+
+```sh
+adb logcat -d -s AndroidCast       # e.g. "received BOOT_COMPLETED", "opening player (boot +20s)"
+adb shell dumpsys package com.androidcast | grep -iE "stopped=|RECEIVE_BOOT"
+```
+
+No `received BOOT_COMPLETED` line means Fire OS didn't tell the app it had booted.
+Usually that's because the app was force‑stopped and hasn't been opened since. Open
+it once, then reboot again.
 
 On the stick, also set:
 - **Settings → Display & Sounds → Screensaver → Start time: Never**

@@ -149,10 +149,16 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
 
     override fun onResume() {
         super.onResume()
+        app.playerInFront = true
         hideSystemUi()
         app.player = this
         // Pick up files that were adb-pushed while we were in the background.
         reload()
+    }
+
+    override fun onPause() {
+        app.playerInFront = false
+        super.onPause()
     }
 
     override fun onDestroy() {

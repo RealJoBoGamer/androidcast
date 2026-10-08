@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 
 class AndroidCastApp : Application() {
     lateinit var library: MediaLibrary
@@ -32,7 +33,7 @@ class AndroidCastApp : Application() {
         // The stick usually sleeps (rather than reboots) when the TV turns off, and Fire OS
         // may show its home screen on wake, so come back to the front when the screen turns on.
         registerReceiver(object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) = showPlayer(delayMs = 2000)
+            override fun onReceive(context: Context, intent: Intent) = showPlayer(delayMs = 2000, reason = "screen on")
         }, IntentFilter(Intent.ACTION_SCREEN_ON))
     }
 
@@ -43,15 +44,37 @@ class AndroidCastApp : Application() {
      * this only works from the background once "display over other apps" is allowed:
      *   adb shell appops set com.androidcast SYSTEM_ALERT_WINDOW allow
      */
-    fun showPlayer(delayMs: Long = 0) {
+    fun showPlayer(delayMs: Long = 0, reason: String = "") {
         handler.postDelayed({
-            if (prefs.autostart) {
-                startActivity(
-                    Intent(this, MainActivity::class.java)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                )
+            when {
+                !prefs.autostart -> Log.i(TAG, "autostart off, not opening ($reason)")
+                playerInFront -> Log.i(TAG, "player already in front ($reason)")
+                else -> {
+                    Log.i(TAG, "opening player ($reason)")
+                    startActivity(
+                        Intent(this, MainActivity::class.java)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    )
+                }
             }
         }, delayMs)
+    }
+
+    /**
+     * After boot, slow sticks (Fire OS 5) can take a minute or more to finish starting their home
+     * screen, which then covers the player. Keep re-checking for a while; each attempt does nothing
+     * if the player is already on screen.
+     */
+    fun showPlayerAfterBoot() {
+        for (seconds in BOOT_RETRY_SECONDS) showPlayer(seconds * 1000L, "boot +${seconds}s")
+    }
+
+    /** True while [MainActivity] is resumed (visible and in front). */
+    @Volatile var playerInFront = false
+
+    companion object {
+        const val TAG = "AndroidCast"
+        private val BOOT_RETRY_SECONDS = listOf(0, 10, 20, 40, 60, 90, 120)
     }
 }
 
