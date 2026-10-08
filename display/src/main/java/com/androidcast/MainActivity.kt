@@ -418,7 +418,16 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
             }
             mp.setOnErrorListener { _, what, extra ->
                 Log.w(TAG, "video error $what/$extra for ${file.name} (${videoWidth}x$videoHeight)")
-                if (gen == generation) flashMessage("Can't play ${file.name} (try H.264 MP4)")
+                if (gen == generation) {
+                    val format = VideoProbe.describe(file)
+                    Log.w(TAG, "can't play ${file.name}: ${format ?: "unknown format"}")
+                    flashMessage(
+                        "Can't play ${file.name}" + (format?.let { "\n($it)" } ?: "") +
+                            "\n\nThis stick plays H.264 video up to 1080p, about 30 fps.\n" +
+                            "Upload it from the AndroidCast Remote app to convert it automatically.",
+                        durationMs = 10_000,
+                    )
+                }
                 true
             }
             mp.setOnPreparedListener { if (gen == generation) it.start() }
@@ -505,11 +514,11 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
         hint.bringToFront()
     }
 
-    private fun flashMessage(text: String) {
+    private fun flashMessage(text: String, durationMs: Long = 4000) {
         hint.text = text
         hint.visibility = View.VISIBLE
         hint.bringToFront()
-        handler.postDelayed({ if (items.isNotEmpty()) hint.visibility = View.GONE }, 4000)
+        handler.postDelayed({ if (items.isNotEmpty()) hint.visibility = View.GONE }, durationMs)
     }
 
     companion object {

@@ -44,6 +44,8 @@ class RemoteActivity : Activity() {
     @Volatile private var lan: LanClient? = null
     /** Wi-Fi transfers run here, so they don't hold up Bluetooth button presses. */
     private val lanPool = Executors.newFixedThreadPool(2)
+    private val uploadPool = Executors.newSingleThreadExecutor()
+    private lateinit var converter: VideoConverter
     private lateinit var phoneWifi: PhoneWifi
     /** The display's Wi-Fi status line from STATUS, e.g. "Home (192.168.1.50)" or "not connected". */
     private var displayWifi: String? = null
@@ -103,6 +105,7 @@ class RemoteActivity : Activity() {
         autostart = findViewById(R.id.autostart)
         transport = findViewById(R.id.transport)
         phoneWifi = PhoneWifi(this)
+        converter = VideoConverter(this)
         intervalButton = findViewById(R.id.interval)
         details = findViewById(R.id.details)
 
@@ -137,6 +140,7 @@ class RemoteActivity : Activity() {
         connection?.close()
         worker.shutdownNow()
         lanPool.shutdownNow()
+        uploadPool.shutdownNow()
         super.onDestroy()
     }
 
@@ -573,53 +577,99 @@ class RemoteActivity : Activity() {
     private fun uploadAll(uris: List<Uri>) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         showUploadState("Preparing…", indeterminate = false)
-        worker.execute {
-            val conn = connection
+        // Own thread: converting a video can take a while, and the remote's buttons
+        // (which use the Bluetooth worker) should keep working meanwhile.
+        uploadPool.execute {
             val results = mutableListOf<String>()
             try {
-                if (conn == null) return@execute
                 uris.forEachIndexed { i, uri ->
-                    val (name, size) = describe(uri)
-                    if (size <= 0) {
-                        results += "$name: couldn't read file size"
-                        return@forEachIndexed
+                    val label = "${i + 1}/${uris.size}"
+                    results += try {
+                        uploadOne(uri, label)
+                    } catch (e: IOException) {
+                        lostConnection(e)
+                        "ERR ${e.message}"
                     }
-                    fun progressVia(via: String): (Long) -> Unit {
-                        val started = System.currentTimeMillis()
-                        return { sent ->
-                            val secs = (System.currentTimeMillis() - started) / 1000.0
-                            val rate = if (secs > 0) sent / 1024 / secs else 0.0
-                            ui.post {
-                                uploadProgress.progress = (sent * 1000 / size).toInt()
-                                uploadText.text = "Uploading ${i + 1}/${uris.size} over $via: $name\n" +
-                                    "${sent / 1024} of ${size / 1024} KB  (%.0f KB/s)".format(rate)
-                            }
-                        }
-                    }
-                    // Wi-Fi first when we're on the same network; Bluetooth if that fails.
-                    val viaWifi = lan?.let { lanNow ->
-                        try {
-                            contentResolver.openInputStream(uri)!!.use { lanNow.upload(name, size, it, progressVia("Wi-Fi")) }
-                        } catch (e: IOException) {
-                            lan = null
-                            ui.post { showTransport() }
-                            null
-                        }
-                    }
-                    results += viaWifi ?: contentResolver.openInputStream(uri)!!.use { stream ->
-                        conn.upload(name, size, stream, progressVia("Bluetooth"))
-                    }
+                    if (connection == null) return@forEachIndexed
                 }
                 ui.post { toast(results.joinToString("\n")) }
-                refreshAllNow()
-            } catch (e: IOException) {
-                lostConnection(e)
+                refreshAll()
             } finally {
                 ui.post {
                     hideUploadState()
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
             }
+        }
+    }
+
+    /** Upload thread. Converts the video first if the TV can't play it, then sends it. */
+    private fun uploadOne(uri: Uri, label: String): String {
+        val (name, size) = describe(uri)
+        if (size <= 0) return "$name: couldn't read file size"
+
+        val info = if (isVideo(name) || contentResolver.getType(uri)?.startsWith("video/") == true) converter.probe(uri) else null
+        val problems = info?.problems.orEmpty()
+        if (info == null || problems.isEmpty()) {
+            return send(name, size, label) { contentResolver.openInputStream(uri)!! }
+        }
+
+        // e.g. "H.265/HEVC, 3840×2160, 60 fps" -> H.264 1080p 30 fps
+        val outName = name.substringBeforeLast('.') + ".mp4"
+        val converted = File(cacheDir, "convert/$outName").apply { parentFile?.mkdirs() }
+        ui.post {
+            uploadProgress.isIndeterminate = false
+            uploadProgress.progress = 0
+            uploadText.text = "Converting $label for the TV: $name\n(${problems.joinToString(", ")} → H.264 1080p)"
+        }
+        // Smaller files over Bluetooth, better quality over Wi-Fi.
+        val bitrate = if (lan != null) 8_000_000 else 3_000_000
+        val error = converter.convert(uri, info, converted, bitrate) { percent ->
+            ui.post {
+                uploadProgress.progress = percent * 10
+                uploadText.text = "Converting $label for the TV: $name  $percent%\n(${problems.joinToString(", ")} → H.264 1080p)"
+            }
+        }
+        if (error != null) return "$name: couldn't convert it ($error) - the TV can't play ${problems.joinToString(", ")}"
+        return try {
+            send(outName, converted.length(), label) { converted.inputStream() }
+        } finally {
+            converted.delete()
+        }
+    }
+
+    /** Upload thread. Wi-Fi first when we're on the same network; Bluetooth if that fails. */
+    private fun send(name: String, size: Long, label: String, open: () -> java.io.InputStream): String {
+        fun progressVia(via: String): (Long) -> Unit {
+            val started = System.currentTimeMillis()
+            return { sent ->
+                val secs = (System.currentTimeMillis() - started) / 1000.0
+                val rate = if (secs > 0) sent / 1024 / secs else 0.0
+                ui.post {
+                    uploadProgress.isIndeterminate = false
+                    uploadProgress.progress = (sent * 1000 / size).toInt()
+                    uploadText.text = "Uploading $label over $via: $name\n" +
+                        "${sent / 1024} of ${size / 1024} KB  (%.0f KB/s)".format(rate)
+                }
+            }
+        }
+        lan?.let { lanNow ->
+            try {
+                return open().use { lanNow.upload(name, size, it, progressVia("Wi-Fi")) }
+            } catch (e: IOException) {
+                lan = null
+                ui.post { showTransport() }
+            }
+        }
+        // Bluetooth I/O must go through the worker thread; wait for it.
+        val task = worker.submit<String> {
+            val conn = connection ?: throw IOException("not connected")
+            open().use { conn.upload(name, size, it, progressVia("Bluetooth")) }
+        }
+        return try {
+            task.get()
+        } catch (e: java.util.concurrent.ExecutionException) {
+            throw (e.cause as? IOException) ?: IOException(e.cause?.message ?: "upload failed")
         }
     }
 

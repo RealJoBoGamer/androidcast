@@ -321,6 +321,11 @@ Files live in `/sdcard/Android/data/com.androidcast/files/backgrounds/`, and
 - **Bluetooth is slow** (roughly 50–200 KB/s on these sticks). Images upload in
   seconds; a 20 MB video takes a few minutes. For big videos, put them somewhere
   with a direct download link and use `FETCH`, or use `adb push`.
+- **Video formats:** this stick plays **H.264 MP4, up to 1080p, about 30 fps**. Phones
+  usually record H.265/HEVC, 4K, 60 fps or HDR, and those show "Can't play" with the
+  reason. The **AndroidCast Remote** app checks each video and **converts it on the
+  phone automatically** before uploading. From a computer, convert with
+  `tools/convert-for-tv.sh video.mp4` (needs ffmpeg), then upload the `.tv.mp4` file.
 - Use **H.264 MP4, 1080p or lower** for videos. Old sticks can't decode 4K or
   HEVC/VP9 reliably. Short loops (10–60 s) keep files small.
   `ffmpeg -i in.mov -c:v libx264 -crf 23 -vf scale=-2:1080 -an out.mp4`
