@@ -73,7 +73,11 @@ class CastConnection private constructor(private val socket: BluetoothSocket) : 
 
         @SuppressLint("MissingPermission")
         fun open(device: BluetoothDevice): CastConnection {
-            BluetoothAdapter.getDefaultAdapter()?.cancelDiscovery()
+            // An ongoing scan slows connecting down, but stopping one needs BLUETOOTH_SCAN on
+            // Android 12+, which this app doesn't ask for (it never scans). Best effort only.
+            try {
+                BluetoothAdapter.getDefaultAdapter()?.cancelDiscovery()
+            } catch (_: SecurityException) {}
             var lastError: IOException? = null
             val factories = listOf<() -> BluetoothSocket>(
                 { device.createRfcommSocketToServiceRecord(SPP_UUID) },
