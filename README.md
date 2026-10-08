@@ -162,7 +162,7 @@ adb shell dumpsys bluetooth_manager | grep -iE "name:|address:|ScanMode|state:"
    in AndroidCast Remote (this opens your Bluetooth settings) and pair with it.
 2. Go back to AndroidCast Remote. It lists your paired devices with the last one
    you used and TV‑like devices at the top. Tap the stick.
-3. Use **Previous / Next**, tap a background to show it, long‑press to delete it,
+3. Use **Previous / Next**, or tap a preview in the grid of backgrounds to show it (the one on the TV is outlined). Long‑press a preview to delete it.
    **Upload** to send pictures and videos from your phone, and the settings for
    fill/fit, sound, auto‑advance, Wi‑Fi and downloading from a link.
 
@@ -203,6 +203,7 @@ with a line starting `OK` or `ERR`.
 | `GOTO <n>` / `SHOW <file>` | jump to item number or filename |
 | `BLANK on\|off` | black screen |
 | `LIST` / `STATUS` / `HELP` | info |
+| `THUMB <file> [width]` | JPEG preview: replies `DATA <bytes>`, the bytes, then `OK` |
 | `INTERVAL <seconds>` | auto‑advance (`0` = off, the default) |
 | `FIT cover\|contain` | crop to fill (default) or letterbox |
 | `AUDIO on\|off` | play video sound (default off) |

@@ -1,7 +1,10 @@
 package com.androidcast
 
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.os.Handler
 import android.os.Looper
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -19,7 +22,12 @@ class CommandProcessor(private val app: AndroidCastApp) {
 
     private val main = Handler(Looper.getMainLooper())
 
-    fun handle(line: String, input: InputStream, progress: (String) -> Unit): String {
+    fun handle(
+        line: String,
+        input: InputStream,
+        progress: (String) -> Unit,
+        sendBytes: (ByteArray) -> Unit = {},
+    ): String {
         val args = tokenize(line)
         if (args.isEmpty()) return "ERR empty command"
         val cmd = args[0].uppercase()
@@ -86,6 +94,18 @@ class CommandProcessor(private val app: AndroidCastApp) {
                 if (!file.delete()) return "ERR could not delete"
                 reload()
                 "OK deleted ${file.name}"
+            }
+            "THUMB" -> {
+                // THUMB <file> [width] -> "DATA <bytes>", then that many bytes of JPEG, then "OK".
+                val file = app.library.find(rest.firstOrNull() ?: return "ERR usage: THUMB <filename> [width]")
+                    ?: return "ERR no such file"
+                val width = rest.getOrNull(1)?.toIntOrNull()?.coerceIn(64, 1280) ?: 320
+                // A disk error here shouldn't drop the Bluetooth connection, so catch IOException.
+                val jpeg = try { thumbnail(file, width) } catch (e: IOException) { null }
+                    ?: return "ERR can't make a preview of ${file.name}"
+                progress("DATA ${jpeg.size}")
+                sendBytes(jpeg)
+                "OK"
             }
             "RENAME", "MV" -> {
                 if (rest.size < 2) return "ERR usage: RENAME <old> <new>"
@@ -206,6 +226,41 @@ class CommandProcessor(private val app: AndroidCastApp) {
         return finish(part, target)
     }
 
+    /** Small JPEG preview of an image or a video's first second, cached until the file changes. */
+    private fun thumbnail(file: File, width: Int): ByteArray? {
+        val cacheDir = File(app.cacheDir, "thumbs").apply { mkdirs() }
+        val cached = File(cacheDir, "${file.name}.${file.lastModified()}.$width.jpg")
+        if (cached.exists()) return cached.readBytes()
+
+        val frame: Bitmap = when (MediaLibrary.kindOf(file)) {
+            MediaLibrary.Kind.IMAGE -> MainActivity.decodeSampled(file, width, width * 9 / 16)
+            MediaLibrary.Kind.VIDEO -> videoFrame(file)
+            null -> null
+        } ?: return null
+        val scaled = if (frame.width > width) {
+            Bitmap.createScaledBitmap(frame, width, maxOf(1, width * frame.height / frame.width), true)
+        } else frame
+        val jpeg = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 75, it) }.toByteArray()
+
+        // Drop previews of older versions of this file, then cache the new one.
+        cacheDir.listFiles()?.filter { it.name.startsWith("${file.name}.") }?.forEach { it.delete() }
+        cached.writeBytes(jpeg)
+        return jpeg
+    }
+
+    private fun videoFrame(file: File): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.getFrameAtTime(1_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime()
+        } catch (e: Exception) {
+            null
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+    }
+
     private fun finish(part: File, target: File): String {
         if (target.exists()) target.delete()
         if (!part.renameTo(target)) {
@@ -272,7 +327,7 @@ class CommandProcessor(private val app: AndroidCastApp) {
         private val HELP = """
             |  Playback:  NEXT | PREV | GOTO <n> | SHOW <file> | BLANK on|off
             |  Settings:  INTERVAL <sec> (0=off) | FIT cover|contain | AUDIO on|off | AUTOSTART on|off
-            |  Files:     LIST | UPLOAD <file> <bytes> | FETCH <url> [file] | DELETE <file> | RENAME <old> <new>
+            |  Files:     LIST | THUMB <file> [width] | UPLOAD <file> <bytes> | FETCH <url> [file] | DELETE <file> | RENAME <old> <new>
             |  Wi-Fi:     WIFI "<network>" "<password>" | FORGETWIFI "<network>"
             |  Info:      STATUS | PING | HELP
             |  Put names with spaces in "double quotes".

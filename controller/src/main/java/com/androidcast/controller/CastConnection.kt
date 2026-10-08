@@ -48,6 +48,23 @@ class CastConnection private constructor(private val socket: BluetoothSocket) : 
         return readLine()
     }
 
+    /** Fetches a JPEG preview with THUMB, or null if the display can't make one (or is an older version). */
+    fun thumbnail(name: String, width: Int): ByteArray? {
+        send("THUMB ${quote(name)} $width")
+        val header = readLine()
+        if (!header.startsWith("DATA ")) return null  // ERR …
+        val size = header.removePrefix("DATA ").trim().toInt()
+        val bytes = ByteArray(size)
+        var read = 0
+        while (read < size) {
+            val n = input.read(bytes, read, size - read)
+            if (n == -1) throw IOException("display disconnected")
+            read += n
+        }
+        readLine()  // final OK
+        return bytes
+    }
+
     private fun send(line: String) {
         output.write((line + "\n").toByteArray(Charsets.UTF_8))
         output.flush()

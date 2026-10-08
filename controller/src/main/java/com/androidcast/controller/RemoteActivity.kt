@@ -5,22 +5,30 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
+import android.text.TextUtils
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
 
@@ -38,6 +46,13 @@ class RemoteActivity : Activity() {
     private var intervalSeconds = 0
     /** Set while we update switches from STATUS, so that doesn't send commands back. */
     private var updatingSwitches = false
+
+    /** Number (1-based) of the background on the TV, for highlighting it in the grid. */
+    private var currentNumber = -1
+    private val cells = mutableMapOf<Int, View>()
+    private val thumbCache = mutableMapOf<String, Bitmap>()
+    /** Bumped whenever the grid is rebuilt, so slow thumbnail loads for an old grid are dropped. */
+    @Volatile private var gridGeneration = 0
 
     private lateinit var connectionText: TextView
     private lateinit var showing: TextView
@@ -182,6 +197,8 @@ class RemoteActivity : Activity() {
 
     private fun showStatus(status: Map<String, String>, raw: List<String>) {
         showing.text = status["showing"]?.let { "Showing: $it" } ?: ""
+        currentNumber = status["showing"]?.substringBefore('/')?.toIntOrNull() ?: -1
+        applyHighlight()
         updatingSwitches = true
         fit.isChecked = status["fit"] == "cover"
         audio.isChecked = status["audio"] == "on"
@@ -198,25 +215,109 @@ class RemoteActivity : Activity() {
 
     private fun showItems(items: List<Item>) {
         itemsBox.removeAllViews()
+        cells.clear()
+        val gen = ++gridGeneration
         if (items.isEmpty()) {
             itemsBox.addView(TextView(this).apply {
                 text = "Nothing on the display yet - upload some images or videos."
                 setPadding(0, dp(8), 0, dp(8))
             })
+            return
         }
-        for (item in items) {
-            itemsBox.addView(TextView(this).apply {
-                text = "${item.number}.  ${item.name}   (${item.size})"
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-                setPadding(dp(4), dp(12), dp(4), dp(12))
-                val outValue = TypedValue()
-                context.theme.resolveAttribute(android.R.attr.selectableItemBackground, outValue, true)
-                setBackgroundResource(outValue.resourceId)
-                setOnClickListener { send("GOTO ${item.number}") }
-                setOnLongClickListener { confirmDelete(item.name); true }
-            })
+        for (row in items.chunked(COLUMNS)) {
+            val rowLayout = LinearLayout(this)
+            for (item in row) rowLayout.addView(makeCell(item, gen), cellParams())
+            repeat(COLUMNS - row.size) { rowLayout.addView(View(this), cellParams()) }
+            itemsBox.addView(rowLayout)
+        }
+        applyHighlight()
+    }
+
+    private fun cellParams() =
+        LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(4), dp(4), dp(4), dp(4)) }
+
+    /** One background: 16:9 preview with its number and name, tap to show, long-press to delete. */
+    private fun makeCell(item: Item, gen: Int): View {
+        val frame = AspectFrameLayout(this).apply {
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            setOnClickListener { send("GOTO ${item.number}") }
+            setOnLongClickListener { confirmDelete(item.name); true }
+        }
+        val match = FrameLayout.LayoutParams.MATCH_PARENT
+        val wrap = FrameLayout.LayoutParams.WRAP_CONTENT
+
+        // Placeholder until the preview arrives.
+        frame.addView(TextView(this).apply {
+            text = item.name
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setBackgroundColor(0xFF2A2638.toInt())
+            setTextColor(0x99FFFFFF.toInt())
+        }, FrameLayout.LayoutParams(match, match))
+
+        val image = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        frame.addView(image, FrameLayout.LayoutParams(match, match))
+
+        frame.addView(TextView(this).apply {
+            text = "${item.number}  ${item.name}"
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0xAA000000.toInt())
+            setPadding(dp(6), dp(3), dp(6), dp(3))
+        }, FrameLayout.LayoutParams(match, wrap, Gravity.BOTTOM))
+
+        if (isVideo(item.name)) {
+            frame.addView(TextView(this).apply {
+                text = "▶"
+                setTextColor(Color.WHITE)
+                setBackgroundColor(0xAA000000.toInt())
+                setPadding(dp(6), dp(2), dp(6), dp(2))
+            }, FrameLayout.LayoutParams(wrap, wrap, Gravity.TOP or Gravity.END))
+        }
+
+        cells[item.number] = frame
+        loadThumbnail(item, image, gen)
+        return frame
+    }
+
+    /** Memory cache, then disk cache, then ask the display (queued behind any button presses). */
+    private fun loadThumbnail(item: Item, image: ImageView, gen: Int) {
+        val key = "${item.name}|${item.size}"
+        thumbCache[key]?.let { return image.setImageBitmap(it) }
+        val diskFile = File(cacheDir, "thumbs/${key.hashCode().toUInt()}.jpg")
+        worker.execute {
+            if (gen != gridGeneration) return@execute
+            val bytes = if (diskFile.exists()) diskFile.readBytes() else {
+                val conn = connection ?: return@execute
+                val fetched = try {
+                    conn.thumbnail(item.name, THUMB_WIDTH)
+                } catch (e: IOException) {
+                    lostConnection(e)
+                    return@execute
+                } ?: return@execute
+                diskFile.parentFile?.mkdirs()
+                diskFile.writeBytes(fetched)
+                fetched
+            }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@execute
+            ui.post {
+                thumbCache[key] = bitmap
+                if (gen == gridGeneration) image.setImageBitmap(bitmap)
+            }
         }
     }
+
+    /** Outlines the background that's on the TV right now. */
+    private fun applyHighlight() {
+        for ((number, cell) in cells) {
+            cell.setBackgroundColor(if (number == currentNumber) ACCENT else Color.TRANSPARENT)
+        }
+    }
+
+    private fun isVideo(name: String) =
+        name.substringAfterLast('.').lowercase() in setOf("mp4", "m4v", "mkv", "webm", "3gp", "mov")
 
     private fun confirmDelete(name: String) {
         AlertDialog.Builder(this)
@@ -421,6 +522,9 @@ class RemoteActivity : Activity() {
     companion object {
         const val EXTRA_ADDRESS = "address"
         private const val PICK_FILES = 1
+        private const val COLUMNS = 2
+        private const val THUMB_WIDTH = 360
+        private const val ACCENT = 0xFFFF5C8A.toInt()
         /** Matches the display's LIST lines: "   3  intro.mp4  (4.2 MB)". */
         internal val ITEM_LINE = Regex("""^\s*(\d+)\s{2}(.+)\s{2}\((.+)\)$""")
     }

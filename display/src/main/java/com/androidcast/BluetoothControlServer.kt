@@ -87,7 +87,11 @@ class BluetoothControlServer(private val processor: CommandProcessor) {
                     val line = readLine(input) ?: break
                     if (line.isBlank()) continue
                     val reply = try {
-                        processor.handle(line.trim(), input) { progress -> send(out, progress) }
+                        processor.handle(
+                            line.trim(), input,
+                            progress = { send(out, it) },
+                            sendBytes = { bytes -> synchronized(out) { out.write(bytes); out.flush() } },
+                        )
                     } catch (e: IOException) {
                         throw e
                     } catch (e: Exception) {
