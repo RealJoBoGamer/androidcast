@@ -2,6 +2,7 @@ package com.androidcast
 
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
@@ -101,6 +102,49 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
                 handler.postDelayed(rescan, 1000)
             }
         }.also { it.startWatching() }
+
+        handleAdbExtras(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleAdbExtras(intent)
+    }
+
+    /**
+     * Pairing helpers for when the remote can't easily reach the stick, triggered from a computer:
+     *   adb shell am start -n com.androidcast/.MainActivity --ez discoverable true
+     *   adb shell am start -n com.androidcast/.MainActivity --es pair AA:BB:CC:DD:EE:FF
+     */
+    private fun handleAdbExtras(intent: Intent?) {
+        intent ?: return
+        intent.getStringExtra(EXTRA_PAIR)?.let { pairWith(it.trim().uppercase()) }
+        if (intent.getBooleanExtra(EXTRA_DISCOVERABLE, false)) requestDiscoverable()
+        intent.removeExtra(EXTRA_PAIR)
+        intent.removeExtra(EXTRA_DISCOVERABLE)
+    }
+
+    /** The stick starts pairing with the phone itself, so the stick never needs to be discoverable. */
+    private fun pairWith(address: String) {
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        val message = when {
+            adapter == null -> "This device has no Bluetooth."
+            !BluetoothAdapter.checkBluetoothAddress(address) ->
+                "'$address' isn't a Bluetooth address (expected AA:BB:CC:DD:EE:FF)."
+            else -> try {
+                adapter.cancelDiscovery()
+                val device = adapter.getRemoteDevice(address)
+                when {
+                    device.bondState == BluetoothDevice.BOND_BONDED -> "Already paired with ${device.name ?: address}."
+                    device.createBond() -> "Pairing with $address…\nConfirm the code on the phone and on this screen."
+                    else -> "Couldn't start pairing with $address. Is the phone's Bluetooth on?"
+                }
+            } catch (e: SecurityException) {
+                "Not allowed to pair: ${e.message}"
+            }
+        }
+        flashMessage(message)
     }
 
     override fun onResume() {
@@ -461,6 +505,8 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
     companion object {
         private const val TAG = "AndroidCast"
         private const val FADE_MS = 600L
+        private const val EXTRA_PAIR = "pair"
+        private const val EXTRA_DISCOVERABLE = "discoverable"
 
         /** Decodes an image no bigger than needed for the screen (old sticks have little RAM). */
         fun decodeSampled(file: File, reqW: Int, reqH: Int): Bitmap? {

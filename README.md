@@ -123,6 +123,38 @@ Bluetooth Devices → Other Bluetooth Devices → Add**, and put the clicker in 
 | Menu / Select / `I` | status panel (Bluetooth name, Wi‑Fi, IP, folder) |
 | Up (while the status panel is open) | make the stick discoverable for 5 minutes so a phone can pair |
 
+## Pairing the stick with your phone using adb
+
+The Remote app only lists devices that are already paired. If the stick doesn't
+show up, connect adb (see above) and use one of these.
+
+**Option A (most reliable): the stick pairs with your phone.**
+Find your phone's Bluetooth address (phone **Settings → About phone → Status**,
+"Bluetooth address"). Keep the phone's Bluetooth settings screen open, then run:
+
+```sh
+adb shell am start -n com.androidcast/.MainActivity --es pair AA:BB:CC:DD:EE:FF
+```
+
+Accept the pairing request on the phone, and on the TV if it asks.
+
+**Option B: make the stick discoverable for 5 minutes**, then pair from the phone's
+Bluetooth settings:
+
+```sh
+adb shell am start -n com.androidcast/.MainActivity --ez discoverable true
+```
+
+The TV shows "allow other devices to see this device?". Choose **Allow** with the remote.
+
+To check what the stick is called and whether it's discoverable:
+
+```sh
+adb shell dumpsys bluetooth_manager | grep -iE "name:|address:|ScanMode|state:"
+```
+
+`SCAN_MODE_CONNECTABLE_DISCOVERABLE` means it's visible right now.
+
 ## Using the AndroidCast Remote app
 
 1. Pair your phone with the stick. On the stick, open AndroidCast and press
