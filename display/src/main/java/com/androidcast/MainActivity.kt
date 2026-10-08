@@ -153,6 +153,12 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
 
     override fun onResume() {
         super.onResume()
+        if (app.home.consumeCancelled()) {
+            // Home was pressed twice: Android delivered the held-back switch to us anyway,
+            // so step aside and leave the Amazon home screen showing.
+            moveTaskToBack(true)
+            return
+        }
         app.playerInFront = true
         app.home.targetShown()
         hideSystemUi()
@@ -164,7 +170,7 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
     /** Called when the user leaves with Home (and not when we open something ourselves). */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        app.home.onHome("Home pressed in AndroidCast")
+        app.home.onHome("Home pressed in AndroidCast", fromHomeScreen = false)
     }
 
     override fun onPause() {

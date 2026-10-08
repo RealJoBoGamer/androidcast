@@ -229,7 +229,8 @@ adb logcat -d -s AndroidCastHome
 ```
 
 **Getting back to Amazon's screens:**
-- **Press Home twice quickly** to get Amazon's home screen.
+- **Press Home, then press it again about a second later**, to stay on Amazon's home
+  screen. This works during the black screen too.
 - In AndroidCast, press **Menu, then Down** to open Fire TV Settings.
 
 **To undo it completely:**

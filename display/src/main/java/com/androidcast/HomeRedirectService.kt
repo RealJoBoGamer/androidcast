@@ -20,29 +20,43 @@ import android.view.accessibility.AccessibilityEvent
  */
 class HomeRedirectService : AccessibilityService() {
 
-    /** Packages that count as "the Amazon home screen": known ones plus whatever handles HOME. */
+    /** Packages that may show the Amazon home screen: known ones plus whatever handles HOME. */
     private lateinit var homePackages: Set<String>
+    /** The HOME activities themselves, e.g. com.amazon.tv.launcher.ui.HomeActivity. */
+    private lateinit var homeActivities: Set<String>
     private var lastLogged = ""
 
     override fun onServiceConnected() {
-        val pm = packageManager
-        val handlers = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
-            .map { it.activityInfo.packageName }
-        homePackages = (AMAZON_HOME + handlers - packageName - "android").toSet()
-        Log.i(TAG, "home button service connected; watching for $homePackages")
+        val handlers = packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
+            .map { it.activityInfo }
+            .filter { it.packageName != packageName && it.packageName != "android" }
+        homePackages = AMAZON_HOME + handlers.map { it.packageName }
+        homeActivities = handlers.map { it.name }.toSet()
+        Log.i(TAG, "home button service connected; home screen = $homeActivities in $homePackages")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
+        val cls = event.className?.toString() ?: ""
         // Log what comes to the front, so `adb logcat -s AndroidCastHome` shows what Home opened.
-        val what = "$pkg/${event.className}"
+        val what = "$pkg/$cls"
         if (what != lastLogged) {
             lastLogged = what
             Log.d(TAG, "window: $what")
         }
         val home = (application as AndroidCastApp).home
-        if (pkg in homePackages) home.onHome("Amazon home appeared") else home.onWindow(pkg)
+        if (isHomeScreen(pkg, cls)) home.onHome("Amazon home appeared", fromHomeScreen = true) else home.onWindow(pkg)
+    }
+
+    /**
+     * On Fire OS the same app shows the home screen AND Settings, Your Apps, search..., so
+     * only its home screen counts - otherwise opening Settings would bounce back too.
+     */
+    private fun isHomeScreen(pkg: String, cls: String): Boolean {
+        if (pkg !in homePackages) return false
+        if (cls.contains("setting", ignoreCase = true)) return false
+        return cls in homeActivities || cls.substringAfterLast('.').contains("home", ignoreCase = true)
     }
 
     override fun onInterrupt() {}

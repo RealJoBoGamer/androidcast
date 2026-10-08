@@ -35,7 +35,7 @@ class HomeRedirector(private val app: AndroidCastApp) {
     private val removeCover = Runnable { hideCover() }
 
     /** Main thread. Returns true if it's redirecting. */
-    fun onHome(source: String): Boolean {
+    fun onHome(source: String, fromHomeScreen: Boolean): Boolean {
         val target = app.prefs.homeTarget
         if (target == HomeRedirectService.HOME_OFF) return false
 
@@ -45,10 +45,11 @@ class HomeRedirector(private val app: AndroidCastApp) {
             return false
         }
         val targetPackage = if (target == HomeRedirectService.HOME_SELF) app.packageName else target
-        when (logic.onHome(targetPackage)) {
+        when (logic.onHome(targetPackage, fromHomeScreen)) {
             HomePressLogic.Decision.ECHO -> return true
             HomePressLogic.Decision.PASS_THROUGH -> {
                 Log.i(TAG, "$source: Home pressed twice - leaving Amazon home screen")
+                hideCover()
                 return false
             }
             HomePressLogic.Decision.REDIRECT -> {}
@@ -64,8 +65,13 @@ class HomeRedirector(private val app: AndroidCastApp) {
 
     /** A window from [pkg] came to the front. */
     fun onWindow(pkg: String) {
+        // Our own cover window also reports as our package; AndroidCast reports itself via targetShown().
+        if (pkg == app.packageName) return
         if (logic.onWindow(pkg)) hideCover()
     }
+
+    /** True if a switch to AndroidCast was cancelled by a second Home press and it should step aside. */
+    fun consumeCancelled(): Boolean = logic.consumeCancelled()
 
     /** The redirect target is on screen: drop the cover and start the double-press window. */
     fun targetShown() {
