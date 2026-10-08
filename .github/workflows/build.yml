@@ -17,5 +17,7 @@ jobs:
       - run: ./gradlew testDebugUnitTest assembleRelease
       - uses: actions/upload-artifact@v4
         with:
-          name: androidcast-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          name: androidcast-apks
+          path: |
+            display/build/outputs/apk/release/display-release.apk
+            controller/build/outputs/apk/release/controller-release.apk

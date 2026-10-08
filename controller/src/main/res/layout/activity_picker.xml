@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="8dp"
+        android:text="Choose your display"
+        android:textAppearance="@android:style/TextAppearance.Material.Title" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="12dp"
+        android:text="Pick the Fire TV stick (or phone) running AndroidCast. Make sure the AndroidCast app is open on it."
+        android:textAppearance="@android:style/TextAppearance.Material.Body1" />
+
+    <ListView
+        android:id="@+id/devices"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <TextView
+        android:id="@+id/empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:padding="24dp"
+        android:textAppearance="@android:style/TextAppearance.Material.Body1"
+        android:visibility="gone" />
+
+    <Button
+        android:id="@+id/pairNew"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pair a new device" />
+</LinearLayout>

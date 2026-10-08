@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "AndroidCast"
-include(":app")
+include(":display", ":controller")

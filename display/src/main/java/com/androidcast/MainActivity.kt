@@ -10,10 +10,12 @@ import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
@@ -54,6 +56,10 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
     private var videoWidth = 0
     private var videoHeight = 0
 
+    /** Notices files added/removed behind our back (e.g. `adb push`) and rescans. */
+    private var folderWatcher: FileObserver? = null
+    private val rescan = Runnable { reload() }
+
     private val advance = Runnable { next() }
     private val hideOverlay = Runnable { overlay.visibility = View.GONE }
     private val refreshOverlay = object : Runnable {
@@ -76,12 +82,25 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         hint = findViewById(R.id.hint)
         overlay = findViewById(R.id.overlay)
         video.surfaceTextureListener = this
+        findViewById<View>(R.id.root).setOnTouchListener { v, e -> onTap(v, e) }
 
         app.player = this
         applyScaleType()
         items = app.library.items()
         val start = app.prefs.currentName?.let { name -> items.indexOfFirst { it.name == name } } ?: -1
         if (items.isEmpty()) showEmpty() else show(maxOf(start, 0))
+
+        @Suppress("DEPRECATION")
+        folderWatcher = object : FileObserver(
+            app.library.dir.absolutePath,
+            CLOSE_WRITE or MOVED_TO or MOVED_FROM or DELETE
+        ) {
+            override fun onEvent(event: Int, path: String?) {
+                // Debounce: a multi-file push fires many events.
+                handler.removeCallbacks(rescan)
+                handler.postDelayed(rescan, 1000)
+            }
+        }.also { it.startWatching() }
     }
 
     override fun onResume() {
@@ -94,6 +113,7 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
 
     override fun onDestroy() {
         if (app.player === this) app.player = null
+        folderWatcher?.stopWatching()
         handler.removeCallbacksAndMessages(null)
         releaseVideo()
         surface?.release()
@@ -146,6 +166,17 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
         return true
     }
 
+    /** Touch controls for phones/tablets: tap left third = previous, right third = next, middle = info. */
+    private fun onTap(view: View, e: MotionEvent): Boolean {
+        if (e.action != MotionEvent.ACTION_UP) return true
+        when {
+            e.x < view.width / 3f -> previous()
+            e.x > view.width * 2 / 3f -> next()
+            else -> toggleOverlay()
+        }
+        return true
+    }
+
     private fun toggleOverlay() {
         handler.removeCallbacks(hideOverlay)
         handler.removeCallbacks(refreshOverlay)
@@ -180,7 +211,7 @@ class MainActivity : Activity(), PlayerControl, TextureView.SurfaceTextureListen
             Interval:   ${if (p.intervalSeconds == 0) "off" else "${p.intervalSeconds}s"}   Fit: ${if (p.cover) "cover" else "contain"}   Audio: ${if (p.audio) "on" else "off"}
             Folder:     ${app.library.dir.absolutePath}
 
-            LEFT/RIGHT switch   1-9 jump   PLAY/PAUSE blank   UP make discoverable   MENU close
+            LEFT/RIGHT (or tap screen edges) switch   1-9 jump   PLAY/PAUSE blank   UP make discoverable   MENU close
         """.trimIndent()
     }
 

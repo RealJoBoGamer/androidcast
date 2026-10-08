@@ -18,6 +18,13 @@ fullscreen playback, Bluetooth input, a Bluetooth serial server, Wi‑Fi setup a
 start on boot. That's what AndroidCast is. It runs on every Fire TV Stick from Fire
 OS 5 (Android 5.1) upwards.
 
+## Two apps
+
+| App | Install on | What it does |
+|---|---|---|
+| **AndroidCast** (`display/`) | the Fire TV stick (or an Android phone/tablet to try it out) | fullscreen looping backgrounds |
+| **AndroidCast Remote** (`controller/`) | your Android phone | pick the stick from your paired Bluetooth devices, then switch backgrounds, upload files, change settings, set up Wi‑Fi |
+
 ## Features
 
 - Fullscreen images (JPG/PNG/WebP/BMP) and looping videos (MP4/MKV/WebM…), with crossfades
@@ -33,17 +40,69 @@ OS 5 (Android 5.1) upwards.
 
 ## Install
 
-1. Get the APK: download `androidcast-apk` from the latest run in the repo's
-   **Actions** tab, or build it yourself with `./gradlew assembleRelease`
-   (output: `app/build/outputs/apk/release/app-release.apk`).
-2. On the stick: **Settings → My Fire TV → Developer options**. Turn on **ADB debugging**
-   and **Apps from unknown sources** (on newer Fire OS, allow it per app). If
-   Developer options is hidden, open **Settings → My Fire TV → About** and click the
-   device name 7 times.
-3. Install it using either option below:
-   - **ADB:** `adb connect <stick-ip>` then `adb install app-release.apk`
-   - **Downloader app:** install "Downloader" from the Amazon store and enter a URL where you've hosted the APK
-4. Open **AndroidCast** from *Your Apps & Channels*.
+Get the APKs: download `androidcast-apks` from the latest run in the repo's
+**Actions** tab, or build them with `./gradlew assembleRelease`:
+
+- `display/build/outputs/apk/release/display-release.apk`: goes on the Fire TV stick
+- `controller/build/outputs/apk/release/controller-release.apk`: goes on your phone
+
+**Phone (controller):** copy the APK to the phone, open it, and allow installing from
+that app when asked. If Play Protect warns you, tap *More details → Install anyway*.
+
+**Fire TV stick (display):** use ADB, as described in the next section.
+
+## Installing and uploading with ADB (from a computer)
+
+ADB sends files to the stick over your Wi‑Fi. It's the fastest way to load big videos.
+
+**1. Turn on ADB on the stick.** Go to **Settings → My Fire TV → Developer options**
+and turn on **ADB debugging** and **Apps from unknown sources** (on newer Fire OS,
+allow it per app). If Developer options is missing, open **Settings → My Fire TV →
+About** and click the device name 7 times. The stick's IP address is under
+**About → Network**.
+
+**2. Install adb on your computer.**
+
+```sh
+sudo pacman -S android-tools        # Arch
+sudo apt install adb                # Debian/Ubuntu
+# Windows/macOS: download "SDK Platform-Tools" from developer.android.com
+```
+
+**3. Connect.** The computer and the stick must be on the same Wi‑Fi.
+
+```sh
+adb connect 192.168.1.50            # use your stick's IP
+```
+
+The first time, the TV asks **"Allow USB debugging?"**. Tick *Always allow* and
+choose **OK**, then run `adb connect` again. `adb devices` should list the stick
+as `device`.
+
+**4. Install the display app.**
+
+```sh
+adb install -r display-release.apk
+adb shell am start -n com.androidcast/.MainActivity     # open it
+```
+
+`-r` lets you install over an older version without losing your backgrounds.
+
+**5. Upload backgrounds.**
+
+```sh
+D=/sdcard/Android/data/com.androidcast/files/backgrounds
+
+adb shell mkdir -p $D               # only needed if the app has never been opened
+adb push 01_intro.mp4 02_studio.jpg $D/
+adb push ~/Pictures/podcast/. $D/   # a whole folder
+adb shell ls -l $D                  # see what's there
+adb shell rm "$D/02_studio.jpg"     # delete one
+```
+
+If AndroidCast is open, new files appear on screen automatically. You don't need to restart it.
+
+**Uninstall:** `adb uninstall com.androidcast`. This also deletes the backgrounds.
 
 > The first install needs Wi‑Fi, since Fire OS setup itself requires a network. After
 > that, the Bluetooth Wi‑Fi setup lets you move the stick to a new location or network
@@ -58,20 +117,32 @@ Bluetooth Devices → Other Bluetooth Devices → Add**, and put the clicker in 
 |---|---|
 | Right / Down / Page Down / Next / Space | next background |
 | Left / Page Up / Previous | previous background |
+| Tap the right / left third of the screen | next / previous (phones & tablets) |
 | 1 – 9 | jump to item |
 | Play/Pause, `B`, `.` | blank screen on/off |
 | Menu / Select / `I` | status panel (Bluetooth name, Wi‑Fi, IP, folder) |
 | Up (while the status panel is open) | make the stick discoverable for 5 minutes so a phone can pair |
 
-## Control from a phone or laptop (Bluetooth serial)
+## Using the AndroidCast Remote app
+
+1. Pair your phone with the stick. On the stick, open AndroidCast and press
+   **Menu**, then **Up** to make it visible. On the phone, tap **Pair a new device**
+   in AndroidCast Remote (this opens your Bluetooth settings) and pair with it.
+2. Go back to AndroidCast Remote. It lists your paired devices with the last one
+   you used and TV‑like devices at the top. Tap the stick.
+3. Use **Previous / Next**, tap a background to show it, long‑press to delete it,
+   **Upload** to send pictures and videos from your phone, and the settings for
+   fill/fit, sound, auto‑advance, Wi‑Fi and downloading from a link.
+
+AndroidCast must be open on the stick while you use the remote.
+
+## Control from a terminal (Bluetooth serial)
 
 The stick runs a Bluetooth **Serial Port Profile** server, so no custom phone app is needed.
 
-**Android phone:** pair with the stick. Either use the stick's Bluetooth settings,
-or press Menu then Up in AndroidCast and pair from the phone. Install a serial
-terminal such as **"Serial Bluetooth Terminal"** and connect to the stick. Type
-commands, or set up its macro buttons as `NEXT`, `PREV`, `GOTO 1`, … to get a
-one‑tap remote.
+**Any Android phone:** the AndroidCast Remote app above is easiest. A generic
+serial terminal app such as "Serial Bluetooth Terminal" also works for typing
+commands.
 
 **iPhone:** iOS doesn't allow Bluetooth serial (SPP), so use a Bluetooth clicker
 for switching, and a laptop (or `FETCH`) for uploads.
@@ -128,12 +199,16 @@ Files live in `/sdcard/Android/data/com.androidcast/files/backgrounds/`, and
 ## Project layout
 
 ```
-app/src/main/java/com/androidcast/
+display/src/main/java/com/androidcast/
   MainActivity.kt            fullscreen player + remote/clicker keys
   BluetoothControlServer.kt  RFCOMM/SPP server
   CommandProcessor.kt        text command protocol (upload, Wi‑Fi, playback…)
   WifiSetup.kt               join Wi‑Fi networks
   MediaLibrary.kt / Prefs.kt storage and settings
   BootReceiver.kt            start on boot
+controller/src/main/java/com/androidcast/controller/
+  DevicePickerActivity.kt    choose a paired Bluetooth device
+  RemoteActivity.kt          remote control screen (buttons, uploads, settings)
+  CastConnection.kt          Bluetooth serial client
 tools/androidcast.py         laptop control & upload script
 ```

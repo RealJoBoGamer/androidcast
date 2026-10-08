@@ -7,7 +7,7 @@ import android.net.wifi.WifiManager
 /**
  * Joins a Wi-Fi network without needing the Fire TV settings screens.
  * Uses the legacy WifiManager API, which works on all Fire OS versions
- * because the app targets API 28 (see app/build.gradle.kts).
+ * because the app targets API 28 (see display/build.gradle.kts).
  */
 @Suppress("DEPRECATION")
 class WifiSetup(context: Context) {
