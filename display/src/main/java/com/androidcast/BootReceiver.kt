@@ -8,9 +8,8 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as AndroidCastApp
-        if (!app.prefs.autostart) return
-        context.startActivity(
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+        app.showPlayer()
+        // Fire OS can finish loading its home screen after us and cover the player, so try again.
+        app.showPlayer(delayMs = 15_000)
     }
 }

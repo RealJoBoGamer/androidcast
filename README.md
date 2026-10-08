@@ -36,7 +36,7 @@ OS 5 (Android 5.1) upwards.
   - **Bluetooth serial commands** from a phone app or the included laptop script
 - **Wi‑Fi setup over Bluetooth** (`WIFI "network" "password"`)
 - **Upload over Bluetooth** (`UPLOAD`), or send a link and let the stick download it over Wi‑Fi (`FETCH`)
-- Starts automatically when the stick powers on, and keeps the screen awake
+- Starts automatically when the stick powers on or the TV wakes up, and keeps the screen awake
 
 ## Install
 
@@ -122,6 +122,40 @@ Bluetooth Devices → Other Bluetooth Devices → Add**, and put the clicker in 
 | Play/Pause, `B`, `.` | blank screen on/off |
 | Menu / Select / `I` | status panel (Bluetooth name, Wi‑Fi, IP, folder) |
 | Up (while the status panel is open) | make the stick discoverable for 5 minutes so a phone can pair |
+
+## Start automatically when the stick powers on
+
+AndroidCast opens by itself when the stick boots, and again whenever the TV or
+screen wakes up. Do these one‑off steps with adb (see above) to make it reliable:
+
+```sh
+# 1. Open the app once after installing. Android won't auto-start an app
+#    that has never been opened.
+adb shell am start -n com.androidcast/.MainActivity
+
+# 2. Allow it to open itself from the background. Needed on newer Fire OS;
+#    harmless on older versions.
+adb shell appops set com.androidcast SYSTEM_ALERT_WINDOW allow
+
+# 3. Test it.
+adb reboot
+```
+
+About 30–60 seconds after the reboot, the Amazon home screen appears and then
+AndroidCast opens on top of it.
+
+On the stick, also set:
+- **Settings → Display & Sounds → Screensaver → Start time: Never**
+- **Settings → Display & Sounds → Screensaver → Sleep: Never**, if your Fire OS version has it
+
+Power the stick from **its own wall adapter** if you want it to stay running when the
+TV is off. When it's powered from the TV's USB port it reboots each time the TV turns
+on, which also works but takes about a minute.
+
+To stop it taking over the screen (for example, to watch Netflix on the stick), send
+`AUTOSTART off`. Pressing **Home** always gets you out until the next boot or wake.
+You can check your Fire OS's Android version with `adb shell getprop ro.build.version.sdk`
+(22 = Fire OS 5, 25 = Fire OS 6, 28 = Fire OS 7, 30 = Fire OS 8).
 
 ## Pairing the stick with your phone using adb
 
