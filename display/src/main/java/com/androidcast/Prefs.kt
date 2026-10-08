@@ -44,6 +44,14 @@ class Prefs(context: Context) {
         get() = sp.getString("lan_token", null) ?: java.util.UUID.randomUUID().toString().replace("-", "")
             .also { sp.edit().putString("lan_token", it).apply() }
 
+    /**
+     * What the Home button opens instead of Amazon's home screen (needs [HomeRedirectService]):
+     * "androidcast", "off" (Amazon home), or another app's package name.
+     */
+    var homeTarget: String
+        get() = sp.getString("home_target", HomeRedirectService.HOME_SELF) ?: HomeRedirectService.HOME_SELF
+        set(v) = sp.edit().putString("home_target", v).apply()
+
     /** Name of the background on screen, restored after a restart. */
     var currentName: String?
         get() = sp.getString("current", null)

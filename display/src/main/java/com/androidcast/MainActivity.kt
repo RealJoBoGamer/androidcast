@@ -195,8 +195,12 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
         if (event.repeatCount > 0) return true
         when (keyCode) {
             KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT,
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_N,
-            KeyEvent.KEYCODE_DPAD_DOWN -> next()
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_N -> next()
+
+            // While the info panel is open, DOWN opens Fire TV settings (handy when Home
+            // is redirected away from the Amazon home screen).
+            KeyEvent.KEYCODE_DPAD_DOWN ->
+                if (overlay.visibility == View.VISIBLE) openSystemSettings() else next()
 
             KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS,
             KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_P -> previous()
@@ -242,6 +246,14 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
         }
     }
 
+    private fun openSystemSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: ActivityNotFoundException) {
+            flashMessage("Couldn't open Settings. Press Home twice for the Amazon home screen.")
+        }
+    }
+
     private fun requestDiscoverable() {
         try {
             startActivity(
@@ -264,7 +276,8 @@ class MainActivity : Activity(), PlayerControl, SurfaceHolder.Callback {
             Interval:   ${if (p.intervalSeconds == 0) "off" else "${p.intervalSeconds}s"}   Fit: ${if (p.cover) "cover" else "contain"}   Audio: ${if (p.audio) "on" else "off"}
             Folder:     ${app.library.dir.absolutePath}
 
-            LEFT/RIGHT (or tap screen edges) switch   1-9 jump   PLAY/PAUSE blank   UP make discoverable   MENU close
+            LEFT/RIGHT (or tap screen edges) switch   1-9 jump   PLAY/PAUSE blank   UP discoverable   DOWN Fire TV settings   MENU close
+            Home twice quickly: Amazon home screen
         """.trimIndent()
     }
 

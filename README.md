@@ -196,6 +196,40 @@ Wi‑Fi transfers use port 8642 on the display and need a secret token that's on
 handed out over the paired Bluetooth link, so other devices on the network can't
 upload or delete anything.
 
+## Using a different launcher (Home button)
+
+Fire OS ignores Android's "default launcher" setting. Home and start‑up always go to
+Amazon's home screen, and the 1st‑gen stick can't be rooted to change that.
+AndroidCast works around it: when Amazon's home screen appears, it immediately opens
+your chosen launcher instead. Amazon's screen may flash for a moment.
+
+**One‑off setup:**
+
+```sh
+adb shell settings put secure enabled_accessibility_services com.androidcast/com.androidcast.HomeRedirectService
+adb shell settings put secure accessibility_enabled 1
+```
+
+**Choose what Home opens:**
+- In the remote app: **Home button opens…**
+- Or with a command: `HOME androidcast` (the default), `HOME off` (Amazon home screen as
+  normal), or `HOME <package>` for another launcher you've installed. `APPS` lists the
+  installed apps and their package names.
+
+To use another launcher, install its APK with `adb install` (pick one that supports
+Android 5.1), then choose it with `HOME`.
+
+**Getting back to Amazon's screens:**
+- **Press Home twice quickly** to get Amazon's home screen.
+- In AndroidCast, press **Menu, then Down** to open Fire TV Settings.
+
+**To undo it completely:**
+
+```sh
+adb shell settings put secure enabled_accessibility_services '""'
+adb shell settings put secure accessibility_enabled 0
+```
+
 ## Hiding Fire TV pop‑ups (quiet mode)
 
 **Notifications:** AndroidCast can dismiss other apps' notifications while the player
@@ -307,6 +341,8 @@ with a line starting `OK` or `ERR`.
 | `LOOP on\|off` | loop videos (default off: play once, stay on the last frame) |
 | `QUIET on\|off` | hide other apps' notifications while showing (default on; needs the adb step below) |
 | `LAN` | the display's Wi‑Fi address and token, used by the remote app for Wi‑Fi transfers |
+| `HOME androidcast\|off\|<package>` | what the Home button opens (needs the adb step below) |
+| `APPS` | list installed apps and their package names |
 | `WIFI "<name>" "<password>"` | join a Wi‑Fi network (omit password for open networks) |
 | `FORGETWIFI "<name>"` | remove a saved network |
 | `UPLOAD <file> <bytes>` | stick replies `READY`, then send exactly `<bytes>` raw bytes |

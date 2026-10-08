@@ -78,6 +78,9 @@ class RemoteActivity : Activity() {
     private lateinit var quiet: Switch
     private lateinit var autostart: Switch
     private lateinit var transport: TextView
+    private lateinit var homeButton: Button
+    /** Package -> name of apps on the display, from APPS (for showing the Home target nicely). */
+    private var displayApps: Map<String, String> = emptyMap()
     private lateinit var intervalButton: Button
     private lateinit var details: TextView
     private lateinit var controls: List<View>
@@ -104,6 +107,8 @@ class RemoteActivity : Activity() {
         quiet = findViewById(R.id.quiet)
         autostart = findViewById(R.id.autostart)
         transport = findViewById(R.id.transport)
+        homeButton = findViewById(R.id.home)
+        homeButton.setOnClickListener { chooseHome() }
         phoneWifi = PhoneWifi(this)
         converter = VideoConverter(this)
         intervalButton = findViewById(R.id.interval)
@@ -116,7 +121,7 @@ class RemoteActivity : Activity() {
         val upload = findViewById<Button>(R.id.upload)
         val wifi = findViewById<Button>(R.id.wifi)
         val fetch = findViewById<Button>(R.id.fetch)
-        controls = listOf(prev, next, blankButton, refresh, upload, fit, audio, loop, quiet, autostart, intervalButton, wifi, fetch)
+        controls = listOf(prev, next, blankButton, refresh, upload, fit, audio, loop, quiet, autostart, homeButton, intervalButton, wifi, fetch)
 
         prev.setOnClickListener { send("PREV") }
         next.setOnClickListener { send("NEXT") }
@@ -260,6 +265,13 @@ class RemoteActivity : Activity() {
         updatingSwitches = false
         displayWifi = status["wifi"]
         showTransport()
+        val home = status["home"]
+        homeButton.text = "Home button opens: " + when {
+            home == null -> "(update the TV app)"
+            home.startsWith("androidcast") -> "AndroidCast"
+            home.startsWith("off") -> "Amazon home screen"
+            else -> home.substringBefore(" ").let { displayApps[it] ?: it }
+        } + if (home?.contains("not enabled") == true) "  (needs adb setup)" else ""
         if ((displayWifi == "off" || displayWifi == "not connected") && !wifiOffered) {
             wifiOffered = true
             offerWifi()
@@ -421,6 +433,33 @@ class RemoteActivity : Activity() {
     }
 
     // ---- Dialogs -----------------------------------------------------------------------
+
+    /** Lets you pick what the TV's Home button opens: AndroidCast, Amazon's home, or an installed launcher. */
+    private fun chooseHome() {
+        worker.execute {
+            val conn = connection ?: return@execute
+            val apps = try {
+                conn.command("APPS").dropLast(1).mapNotNull { line ->
+                    val parts = line.trim().split(Regex("\\s{2,}"), limit = 2)
+                    if (parts.size == 2) parts[0] to parts[1] else null
+                }
+            } catch (e: IOException) {
+                lostConnection(e)
+                return@execute
+            }
+            ui.post {
+                displayApps = apps.toMap()
+                val choices = listOf("androidcast" to "AndroidCast (backgrounds)", "off" to "Amazon home screen (normal)") + apps
+                AlertDialog.Builder(this)
+                    .setTitle("TV Home button opens…")
+                    .setItems(choices.map { it.second }.toTypedArray()) { _, which ->
+                        send("HOME ${CastConnection.quote(choices[which].first)}") { }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+    }
 
     private fun askInterval() {
         val input = EditText(this).apply {

@@ -1,5 +1,6 @@
 package com.androidcast
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Handler
@@ -92,6 +93,30 @@ class CommandProcessor(private val app: AndroidCastApp) {
                 applySettings()
                 "OK loop ${if (app.prefs.loop) "on" else "off"}"
             }
+            "HOME" -> {
+                // HOME androidcast | off | <package> - what the Home button opens.
+                val target = rest.firstOrNull() ?: return "OK home ${app.prefs.homeTarget}"
+                val value = when (target.lowercase()) {
+                    "androidcast", "self", "on" -> HomeRedirectService.HOME_SELF
+                    "off", "amazon" -> HomeRedirectService.HOME_OFF
+                    else -> target.takeIf { HomeRedirectService.launchIntent(app, it) != null }
+                        ?: return "ERR '$target' isn't an installed app - send APPS for the list"
+                }
+                app.prefs.homeTarget = value
+                "OK home $value" +
+                    if (value != HomeRedirectService.HOME_OFF && !HomeRedirectService.isEnabled(app)) " (needs the adb step in the README to take effect)" else ""
+            }
+            "APPS" -> {
+                // Launchable apps, for choosing a HOME target: "  <package>  <label>"
+                val pm = app.packageManager
+                val apps = listOf(Intent.CATEGORY_LEANBACK_LAUNCHER, Intent.CATEGORY_LAUNCHER)
+                    .flatMap { cat -> pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(cat), 0) }
+                    .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+                    .filter { it.first != app.packageName }
+                    .distinctBy { it.first }
+                    .sortedBy { it.second.lowercase() }
+                (apps.map { (pkg, label) -> "  $pkg  $label" } + "OK ${apps.size} app(s)").joinToString("\n")
+            }
             "AUTOSTART" -> {
                 app.prefs.autostart = parseOnOff(rest.firstOrNull()) ?: return "ERR usage: AUTOSTART on|off"
                 "OK autostart ${if (app.prefs.autostart) "on" else "off"}"
@@ -148,6 +173,7 @@ class CommandProcessor(private val app: AndroidCastApp) {
             "  loop:      ${if (p.loop) "on" else "off"}",
             "  autostart: ${if (p.autostart) "on" else "off"}",
             "  quiet:     ${if (p.quiet) "on" else "off"}${if (NotificationBlocker.isEnabled(app)) "" else " (no notification access)"}",
+            "  home:      ${p.homeTarget}${if (HomeRedirectService.isEnabled(app)) "" else " (home button service not enabled)"}",
             "  free:      ${app.library.dir.usableSpace / MB} MB",
             "OK",
         ).joinToString("\n")
@@ -361,6 +387,7 @@ class CommandProcessor(private val app: AndroidCastApp) {
             |  Settings:  INTERVAL <sec> (0=off) | FIT cover|contain | AUDIO on|off | LOOP on|off | AUTOSTART on|off | QUIET on|off
             |  Files:     LIST | THUMB <file> [width] | UPLOAD <file> <bytes> | FETCH <url> [file] | DELETE <file> | RENAME <old> <new>
             |  Wi-Fi:     WIFI "<network>" "<password>" | FORGETWIFI "<network>" | LAN
+            |  Home:      HOME androidcast|off|<package> | APPS
             |  Info:      STATUS | PING | HELP
             |  Put names with spaces in "double quotes".
             |OK

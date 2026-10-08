@@ -151,6 +151,12 @@
             android:paddingBottom="8dp"
             android:text="Open automatically at power-on" />
 
+        <Button
+            android:id="@+id/home"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Home button opens: …" />
+
         <Switch
             android:id="@+id/audio"
             android:layout_width="match_parent"
